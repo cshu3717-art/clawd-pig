@@ -21,24 +21,31 @@ contextBridge.exposeInMainWorld('petAPI', {
   show: () => ipcRenderer.invoke('pet:show'),
 
   // 屏幕：当前所在显示器的可用工作区 { x, y, width, height }
-  getWorkArea: () => ipcRenderer.invoke('pet:get-work-area'),
+  getWorkArea: (point) => ipcRenderer.invoke('pet:get-work-area', point),
 
   // 窗口位置（DIP）
   getPosition: () => ipcRenderer.invoke('pet:get-position'),
   setPosition: (x, y) => ipcRenderer.invoke('pet:set-position', clampNum(x), clampNum(y)),
 
   // —— 自主移动（唯一控制器在主进程，插值平滑，完成只通知一次）
-  startMove: (x, y, durationMs) =>
+  startMove: (x, y, durationMs, targetPoint) =>
     ipcRenderer.invoke('pet:start-move', {
       x: clampNum(x),
       y: clampNum(y),
       duration: clampNum(durationMs),
+      targetPoint,
     }),
   cancelMove: () => ipcRenderer.invoke('pet:cancel-move'),
   onMoveComplete: (cb) => {
     const listener = (_event, data) => { if (cb) cb(data); };
     ipcRenderer.on('pet:move-complete', listener);
     return () => ipcRenderer.removeListener('pet:move-complete', listener);
+  },
+
+  onPosition: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on('pet:position', listener);
+    return () => ipcRenderer.removeListener('pet:position', listener);
   },
 
   // 窗口尺寸与位置（用于气泡区扩展、精灵尺寸自适应）
@@ -48,6 +55,9 @@ contextBridge.exposeInMainWorld('petAPI', {
       y: clampNum(b && b.y),
       width: clampNum(b && b.width),
       height: clampNum(b && b.height),
+      anchorX: clampNum(b && b.anchorX),
+      anchorY: clampNum(b && b.anchorY),
+      preserveAnchor: !!(b && b.preserveAnchor),
     }),
 
   // 右键菜单：返回 'walk-toggle'|'to-idle'|'action:<id>'|'size:<id>'|'sprite:<id>'|'demo:all'|'quit'|null
@@ -67,11 +77,12 @@ contextBridge.exposeInMainWorld('iconAPI', {
     path: String((payload && payload.path) || ''),
     hunger: Number.isFinite(payload && payload.hunger) ? payload.hunger : 50,
   }),
-  eat: (payload) => ipcRenderer.invoke('icons:eat', {
-    name: String((payload && payload.name) || ''),
-    path: String((payload && payload.path) || ''),
-    hunger: Number.isFinite(payload && payload.hunger) ? payload.hunger : 50,
-  }),
+  prepare: (payload) => ipcRenderer.invoke('icons:prepare', payload || {}),
+  eat: (token) => ipcRenderer.invoke('icons:eat', token),
+  release: (token) => ipcRenderer.invoke('icons:release', token),
+  requestEat: (path, real) => ipcRenderer.invoke('icons:requestEat', { path, real: !!real }),
+  mealResult: (id, result) => ipcRenderer.invoke('icons:mealResult', id, result),
+  setRealMode: (enabled) => ipcRenderer.invoke('icons:setRealMode', !!enabled),
   stored: () => ipcRenderer.invoke('icons:stored'),
   plant: (id) => ipcRenderer.invoke('icons:plant', String(id || '')),
   harvest: (id) => ipcRenderer.invoke('icons:harvest', String(id || '')),

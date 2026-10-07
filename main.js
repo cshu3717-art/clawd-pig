@@ -12,10 +12,10 @@
  * validation-extended-v3*.json 布局播放；不存在则由渲染进程回退到 clawd-pig.png。
  */
 
-const { app, BrowserWindow, ipcMain, screen, Menu, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Menu, protocol, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { pathToFileURL } = require('node:url');
+const { locate } = require('./lib/desktop-targets');
 
 const ASSET_DIR = __dirname; // 素材与代码同目录（当前工作区）
 const SPRITE_DIR = path.join(__dirname, 'assets');
@@ -71,6 +71,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let win = null;
+let petOffset = { x: 0, y: 0 };
+let petPlaced = false;
 
 /* ---------------- 素材读取（只读，绝不修改 PNG） ---------------- */
 
@@ -156,7 +158,7 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
       spellcheck: false,
-      backgroundThrottling: true,
+      backgroundThrottling: false,
     },
   });
 
@@ -172,9 +174,12 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
 
-  win.on('closed', () => {
-    win = null;
+  win.on('move', () => {
+    if (!win || win.isDestroyed()) return;
+    const b = win.getBounds();
+    win.webContents.send('pet:position', { x: b.x, y: b.y, anchorX: b.x + petOffset.x, anchorY: b.y + petOffset.y });
   });
+  win.on('closed', () => { clearMove(); win = null; app.quit(); });
 
   win.loadURL('app://pet/index.html');
 }
@@ -191,11 +196,12 @@ function isFiniteNum(v) {
 
 ipcMain.handle('pet:get-assets', () => getAssetsPayload());
 
-ipcMain.handle('pet:get-work-area', (event) => {
+ipcMain.handle('pet:get-work-area', (event, point) => {
   const w = winOf(event);
   if (!w) return null;
   try {
-    const wa = screen.getDisplayMatching(w.getBounds()).workArea;
+    const wa = point && isFiniteNum(point.x) && isFiniteNum(point.y)
+      ? screen.getDisplayNearestPoint(point).workArea : screen.getDisplayMatching(w.getBounds()).workArea;
     return { x: wa.x, y: wa.y, width: wa.width, height: wa.height };
   } catch {
     return null;
@@ -206,7 +212,7 @@ ipcMain.handle('pet:get-position', (event) => {
   const w = winOf(event);
   if (!w) return null;
   const b = w.getBounds();
-  return { x: b.x, y: b.y };
+  return { x: b.x, y: b.y, anchorX: b.x + petOffset.x, anchorY: b.y + petOffset.y };
 });
 
 ipcMain.handle('pet:set-position', (event, x, y) => {
@@ -243,7 +249,8 @@ ipcMain.handle('pet:start-move', (event, opts) => {
   let tx = Math.round(x);
   let ty = Math.round(y);
   try {
-    const wa = screen.getDisplayMatching(w.getBounds()).workArea;
+    const p = opts.targetPoint;
+    const wa = p && isFiniteNum(p.x) && isFiniteNum(p.y) ? screen.getDisplayNearestPoint(p).workArea : screen.getDisplayMatching(w.getBounds()).workArea;
     const b = w.getBounds();
     const minX = wa.x + 10;
     const maxX = wa.x + wa.width - b.width - 10;
@@ -259,7 +266,7 @@ ipcMain.handle('pet:start-move', (event, opts) => {
   const token = seq;
   motion = { token, from: { x: from.x, y: from.y }, to: { x: tx, y: ty }, dur, t0: Date.now() };
   moveTimer = setInterval(() => {
-    if (!motion) return;
+    if (!motion || w.isDestroyed()) { clearMove(); return; }
     const elapsed = Date.now() - motion.t0;
     const p = Math.max(0, Math.min(1, elapsed / motion.dur));
     const ep = easeInOutSine(p);
@@ -267,7 +274,7 @@ ipcMain.handle('pet:start-move', (event, opts) => {
     const ny = Math.round(motion.from.y + (motion.to.y - motion.from.y) * ep);
     w.setPosition(nx, ny);
     if (p >= 1) {
-      const done = { token: motion.token, x: nx, y: ny };
+      const done = { token: motion.token, x: nx, y: ny, anchorX: nx + petOffset.x, anchorY: ny + petOffset.y };
       clearMove();
       try { event.sender.send('pet:move-complete', done); } catch (e) { /* ignore */ }
     }
@@ -286,7 +293,20 @@ ipcMain.handle('pet:set-bounds', (event, b) => {
   const { x, y, width, height } = b;
   if (![x, y, width, height].every(isFiniteNum)) return false;
   if (width < 8 || width > MAX_DIM || height < 8 || height > MAX_DIM) return false;
-  w.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) });
+  let nx = Math.round(x), ny = Math.round(y);
+  const offset = { x: isFiniteNum(b.anchorX) ? b.anchorX : petOffset.x, y: isFiniteNum(b.anchorY) ? b.anchorY : petOffset.y };
+  if (w === win && b.preserveAnchor && petPlaced) {
+    const current = w.getBounds();
+    nx = Math.round(current.x + petOffset.x - offset.x);
+    ny = Math.round(current.y + petOffset.y - offset.y);
+    if (motion) {
+      const dx = nx - current.x, dy = ny - current.y;
+      motion.from.x += dx; motion.to.x += dx;
+      motion.from.y += dy; motion.to.y += dy;
+    }
+  }
+  if (w === win) { petOffset = offset; petPlaced = true; }
+  w.setBounds({ x: nx, y: ny, width: Math.round(width), height: Math.round(height) });
   return true;
 });
 
@@ -437,7 +457,8 @@ function saveIconManifest() {
       try { fs.copyFileSync(file, path.join(bellyDir(), 'manifest.bak.json')); } catch (e) { /* ignore */ }
     }
     atomicWriteJson(file, iconManifest);
-  } catch (e) { /* ignore */ }
+    return true;
+  } catch (e) { return false; }
 }
 
 // 去掉 “名字 (1)” 这类去重后缀，尽量还原原始文件名
@@ -540,7 +561,7 @@ function uniqueNameIn(dir, wantedName) {
   while (fs.existsSync(path.join(dir, name))) {
     name = `${base} (${i})${ext}`;
     i++;
-    if (i > 999) break;
+    if (i > 9999) throw new Error('Too many duplicate shortcut names');
   }
   return name;
 }
@@ -551,7 +572,7 @@ function isBlockedName(name) {
 }
 
 // 只扫描 .lnk / .url 文件；文件夹与其它真实文件全部忽略
-function scanDesktop() {
+async function scanDesktop() {
   const dir = desktopDir();
   if (!dir || !fs.existsSync(dir)) return { ok: false, reason: 'desktop-not-found', dir, entries: [] };
   const entries = [];
@@ -575,7 +596,7 @@ function scanDesktop() {
     });
   }
   entries.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
-  return { ok: true, dir, entries };
+  return { ok: true, dir, entries: await locate(entries, screen) };
 }
 
 async function iconDataUrl(filePath) {
@@ -603,7 +624,7 @@ function appetiteScore(entry, hunger) {
 
 function todayKey() { return new Date().toISOString().slice(0, 10); }
 
-function eatBlockReason(entry, hunger) {
+function eatBlockReason(entry, hunger, skipAppetite = false) {
   if (iconSettings.scanOnly) return 'scanOnly';
   if (!entry || !entry.path) return 'bad-entry';
   const ext = path.extname(entry.path).toLowerCase();
@@ -611,17 +632,17 @@ function eatBlockReason(entry, hunger) {
   if (isBlockedName(path.basename(entry.path))) return 'blocked';
   const dir = desktopDir();
   if (!dir || path.dirname(path.resolve(entry.path)) !== path.resolve(dir)) return 'not-on-desktop';
-  if (!fs.existsSync(entry.path)) return 'missing';
+  try { if (!fs.lstatSync(entry.path).isFile()) return 'not-shortcut'; } catch { return 'missing'; }
   if (iconSettings.eatenDay !== todayKey()) { iconSettings.eatenDay = todayKey(); iconSettings.eatenToday = 0; saveIconSettings(); }
   if (iconSettings.eatenToday >= iconSettings.dailyLimit) return 'daily-limit';
   if (Date.now() - iconSettings.lastEatAt < iconSettings.cooldownMs) return 'cooldown';
-  if (appetiteScore(entry, hunger) < 35) return 'not-hungry';
+  if (!skipAppetite && appetiteScore(entry, hunger) < 35) return 'not-hungry';
   return null;
 }
 
 // 真正“吃掉”：先原子写清单，再移动（EXDEV 时复制+删除源）
 function eatIcon(entry, hunger) {
-  const reason = eatBlockReason(entry, hunger);
+  const reason = eatBlockReason(entry, hunger, true);
   if (reason) return { ok: false, reason };
   const belly = bellyDir();
   const storedName = uniqueNameIn(belly, entry.name); // 有同名不覆盖
@@ -636,17 +657,20 @@ function eatIcon(entry, hunger) {
     ext: path.extname(entry.name).toLowerCase(),
     eatenAt: Date.now(),
     status: 'moving',   // 先落盘，异常中断可自愈
-    desktopPos: null,   // 稳定的 Shell 接口不提供图标坐标 → 留空
+    desktopPos: entry.target || null, // 保存识别到的原桌面位置（恢复文件时不承诺恢复排列）
     restoredAt: null,
   };
   iconManifest.push(rec);
-  saveIconManifest();    // 原子化保存清单（移动之前）
+  if (!saveIconManifest()) {
+    iconManifest.pop();
+    return { ok: false, reason: 'storage-write-failed' };
+  }
   try {
     try {
       fs.renameSync(entry.path, storedPath);
     } catch (e) {
       if (e && e.code === 'EXDEV') {
-        fs.copyFileSync(entry.path, storedPath);
+        fs.copyFileSync(entry.path, storedPath, fs.constants.COPYFILE_EXCL);
         fs.unlinkSync(entry.path);
       } else { throw e; }
     }
@@ -683,7 +707,7 @@ function restoreIcon(id) {
       fs.renameSync(storedPath, target);
     } catch (e) {
       if (e && e.code === 'EXDEV') {
-        fs.copyFileSync(storedPath, target);
+        fs.copyFileSync(storedPath, target, fs.constants.COPYFILE_EXCL);
         fs.unlinkSync(storedPath);
       } else { throw e; }
     }
@@ -782,19 +806,96 @@ ipcMain.handle('icons:preview', (event, payload) => {
   }
   return true;
 });
-ipcMain.handle('icons:evaluate', (event, payload) => {  const p = payload || {};
-  const dir = desktopDir();
-  if (!dir || typeof p.path !== 'string' || path.dirname(path.resolve(p.path)) !== path.resolve(dir)) {
-    return { ok: false, reason: 'not-on-desktop' };
+// 吃图标只有一个事务；面板发请求，宠物走近并播完动画后才能提交。
+let activeMeal = null;
+const pendingMeals = new Map();
+function fromPet(event) { return win && !win.isDestroyed() && event.sender === win.webContents; }
+function cancelMeal() {
+  activeMeal = null;
+  if (win && !win.isDestroyed()) win.webContents.send('icons:pet-command', { type: 'cancel-meal' });
+}
+
+ipcMain.handle('icons:prepare', async (event, payload = {}) => {
+  if (!fromPet(event)) return { ok: false, reason: 'not-pet' };
+  if (activeMeal) return { ok: false, reason: 'busy' };
+  const meal = { token: randomUUID(), pending: true };
+  activeMeal = meal;
+  try {
+    const scan = await scanDesktop();
+    if (activeMeal !== meal) return { ok: false, reason: 'cancelled' };
+    const entries = scan.entries || [];
+    const entry = payload.path ? entries.find(e => e.path === path.resolve(payload.path)) : entries[Math.floor(Math.random() * entries.length)];
+    if (!entry) { activeMeal = null; return { ok: false, reason: 'no-candidates' }; }
+    const real = !!payload.real;
+    const reason = real ? eatBlockReason(entry, payload.hunger, true) : null;
+    if (reason) { activeMeal = null; return { ok: false, reason }; }
+    if (real && entry.target.source !== 'desktop' && !(testDesktopOverride() && entry.target.source === 'test')) {
+      activeMeal = null;
+      return { ok: false, reason: 'position-unavailable' };
+    }
+    const score = appetiteScore(entry, payload.hunger);
+    Object.assign(meal, { pending: false, entry, real, score, hunger: payload.hunger, expires: Date.now() + 45000 });
+    return { ok: true, token: meal.token, entry, real, accepted: score >= 35, score };
+  } catch {
+    if (activeMeal === meal) activeMeal = null;
+    return { ok: false, reason: 'scan-failed' };
   }
-  const entry = { name: path.basename(p.path), path: path.resolve(p.path), ext: path.extname(p.path).toLowerCase() };
-  const blocked = eatBlockReason(entry, p.hunger);
-  return { ok: !blocked, reason: blocked || null, score: appetiteScore(entry, p.hunger), entry };
 });
-ipcMain.handle('icons:eat', (event, payload) => {
-  const p = payload || {};
-  const entry = { name: p.name, path: p.path, ext: path.extname(String(p.path || '')).toLowerCase() };
-  return eatIcon(entry, p.hunger);
+ipcMain.handle('icons:eat', (event, token) => {
+  const meal = activeMeal;
+  if (!fromPet(event) || !meal || meal.pending || meal.token !== token || !meal.real) return { ok: false, reason: 'invalid-meal' };
+  activeMeal = null; // 单次凭据；重复点击或迟到回调不能再次移动。
+  if (meal.expires < Date.now()) return { ok: false, reason: 'expired' };
+  if (meal.score < 35) return { ok: false, reason: 'not-hungry' };
+  try {
+    const st = fs.lstatSync(meal.entry.path);
+    if (!st.isFile() || st.mtimeMs !== meal.entry.mtime || st.size !== meal.entry.size) return { ok: false, reason: 'target-changed' };
+    return eatIcon(meal.entry, meal.hunger);
+  } catch { return { ok: false, reason: 'missing' }; }
+});
+ipcMain.handle('icons:release', (event, token) => {
+  if (fromPet(event) && (!token || (activeMeal && token === activeMeal.token))) activeMeal = null;
+  return true;
+});
+ipcMain.handle('icons:requestEat', (event, payload = {}) => {
+  if (!win || win.isDestroyed()) return { ok: false, reason: 'pet-unavailable' };
+  if (pendingMeals.size || activeMeal) return { ok: false, reason: 'busy' };
+  const id = randomUUID();
+  return new Promise(resolve => {
+    const timer = setTimeout(() => { pendingMeals.delete(id); cancelMeal(); resolve({ ok: false, reason: 'timeout' }); }, 45000);
+    pendingMeals.set(id, { resolve, timer });
+    win.webContents.send('icons:pet-command', { type: 'eat', id, path: String(payload.path || ''), real: !!payload.real });
+  });
+});
+ipcMain.handle('icons:mealResult', (event, id, result) => {
+  if (!fromPet(event)) return false;
+  const pending = pendingMeals.get(id);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  pendingMeals.delete(id);
+  pending.resolve(result);
+  return true;
+});
+ipcMain.handle('icons:evaluate', (_event, payload = {}) => {
+  const dir = desktopDir();
+  if (!dir || !payload.path || path.dirname(path.resolve(payload.path)) !== path.resolve(dir)) return { ok: false, reason: 'not-on-desktop' };
+  const entry = { path: path.resolve(payload.path), name: path.basename(payload.path), ext: path.extname(payload.path).toLowerCase() };
+  const score = appetiteScore(entry, payload.hunger);
+  const reason = eatBlockReason(entry, payload.hunger, true) || (score < 35 ? 'not-hungry' : null);
+  return { ok: !reason, reason, score, entry };
+});
+ipcMain.handle('icons:setRealMode', async (event, enabled) => {
+  if (!enabled) { iconSettings.scanOnly = true; cancelMeal(); saveIconSettings(); return iconSettings; }
+  if (!iconSettings.scanOnly) return iconSettings;
+  const parent = winOf(event);
+  const result = await dialog.showMessageBox(parent, {
+    type: 'question', title: '允许小猪吃快捷方式',
+    message: '开启真实移动？',
+    detail: '只移动桌面上的 .lnk / .url 快捷方式到小猪仓库，不删除文件。照片、文档、文件夹和系统图标不会被吃掉。随时可以点“立即恢复全部”。',
+    buttons: ['取消', '开启'], defaultId: 0, cancelId: 0, noLink: true,
+  });
+  if (result.response === 1) { iconSettings.scanOnly = false; saveIconSettings(); }
+  return iconSettings;
 });
 ipcMain.handle('icons:stored', () => storedList());
 ipcMain.handle('icons:plant', (event, id) => plantIcon(id));
@@ -807,12 +908,13 @@ ipcMain.handle('icons:plantAnimate', (event, id) => {
   }
   return r;
 });
-ipcMain.handle('icons:restoreAll', () => restoreAllIcons());
+ipcMain.handle('icons:restoreAll', () => { cancelMeal(); return restoreAllIcons(); });
 ipcMain.handle('icons:openPanel', () => { createPanelWindow(); return true; });
 ipcMain.handle('icons:setSettings', (event, patch) => {
   if (patch && typeof patch === 'object') {
-    if (typeof patch.scanOnly === 'boolean' && iconSettings.scanOnly !== patch.scanOnly) {
-      iconSettings.scanOnly = patch.scanOnly; // 真实移动开关（默认保持 true）
+    if (typeof patch.scanOnly === 'boolean' && (patch.scanOnly || testDesktopOverride()) && iconSettings.scanOnly !== patch.scanOnly) {
+      iconSettings.scanOnly = patch.scanOnly;
+      if (patch.scanOnly) cancelMeal(); // 开启只扫描时立即取消正在进行的吃图标
     }
     if (Number.isFinite(patch.dailyLimit)) iconSettings.dailyLimit = Math.max(0, Math.min(20, Math.round(patch.dailyLimit)));
     if (Number.isFinite(patch.cooldownMs)) iconSettings.cooldownMs = Math.max(0, Math.min(3600000, Math.round(patch.cooldownMs)));

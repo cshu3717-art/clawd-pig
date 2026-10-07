@@ -1,128 +1,116 @@
 'use strict';
-
-/* 图标仓库面板：只通过 preload 暴露的 iconAPI 工作，不直接触碰文件系统 */
 (function () {
   const api = window.iconAPI;
-  const $ = (id) => document.getElementById(id);
-
-  const STATUS_TEXT = {
-    stored: '已吃下（种子）',
-    planting: '种植中',
-    moving: '处理中',
-    restored: '已恢复',
-    missing: '文件缺失',
+  const $ = id => document.getElementById(id);
+  let scanned = false, busy = false, scanSequence = 0;
+  const messages = {
+    busy: '小猪正在忙，等这一段结束再试。',
+    scanOnly: '先勾选“允许真实移动”。',
+    'not-hungry': '小猪闻了闻，这次不想吃。',
+    'daily-limit': '今天已经吃够了，种回来陪它玩吧。',
+    cooldown: '小猪还在消化，稍后再试。',
+    'position-unavailable': '没有识别到这个图标的实际位置，可以先预览。',
+    'target-unreachable': '这次没有走到目标旁，快捷方式仍在桌面。',
+    'target-changed': '快捷方式刚刚变动了，请重新扫描。',
+    cancelled: '已取消，尚未吞下的快捷方式仍在桌面。',
+    'animation-unavailable': '吃图标素材未就绪，没有移动快捷方式。',
+    'storage-write-failed': '仓库记录保存失败，快捷方式仍在桌面。',
+    'no-candidates': '这个快捷方式已不在候选列表，请重新扫描。',
+    failed: '没有完成操作，请重试。',
   };
-
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const statusText = { stored: '已吃下，可种植', planting: '种植中，可收获', moving: '处理中' };
+  function say(message) { $('status').textContent = message; }
+  function resultMessage(result) {
+    if (!result || !result.ok) return messages[result && result.reason] || '操作未完成，请刷新后重试。';
+    return result.preview ? '预览完成，真实快捷方式没有移动。' : '吃好啦，可以在下面种植或恢复。';
   }
-
-  async function iconFor(path) {
-    try { return await api.iconOf(path); } catch (e) { return null; }
+  function button(text, action) {
+    const b = document.createElement('button');
+    b.className = 'mini'; b.textContent = text;
+    b.onclick = async () => {
+      if (busy) return;
+      busy = true; b.disabled = true;
+      try { await action(); }
+      catch { say('操作没完成，请刷新后再试。'); }
+      finally { busy = false; b.disabled = false; await refresh(); if (scanned) await scan(); }
+    };
+    return b;
   }
-
+  function row(name, detail) {
+    const el = document.createElement('div'); el.className = 'item';
+    const img = document.createElement('img'); img.alt = '';
+    const label = document.createElement('span'); label.className = 'nm'; label.textContent = name;
+    const sub = document.createElement('small'); sub.className = 'st'; sub.textContent = detail;
+    label.appendChild(document.createElement('br')); label.appendChild(sub);
+    el.append(img, label);
+    return { el, img };
+  }
   async function refresh() {
     const st = await api.state();
     if (!st) return;
-    $('deskPath').textContent = st.desktop || '（未找到）';
+    $('deskPath').textContent = st.desktop || '未找到桌面';
     $('bellyPath').textContent = st.belly || '—';
-    const scanOnly = !!(st.settings && st.settings.scanOnly);
-    const mode = $('mode');
-    mode.textContent = scanOnly ? '扫描模式（不移动真实图标）' : '真实移动已开启';
-    mode.className = 'badge' + (scanOnly ? '' : ' warn');
+    const scanOnly = st.settings.scanOnly;
+    $('mode').textContent = scanOnly ? '只预览' : '真实移动已开启';
+    $('mode').className = 'badge' + (scanOnly ? '' : ' warn');
     $('scanOnly').checked = !scanOnly;
-    renderSeeds(st.stored || []);
-  }
-
-  function renderSeeds(list) {
-    const box = $('seeds');
-    box.innerHTML = '';
-    if (!list.length) { box.innerHTML = '<div class="empty">暂无。吃下（或测试移入）的快捷方式会出现在这里。</div>'; return; }
-    for (const s of list) {
-      const el = document.createElement('div');
-      el.className = 'item';
-      el.innerHTML = `<img alt=""><span class="nm">${esc(s.name)}<br><span class="st">${esc(STATUS_TEXT[s.status] || s.status)} · ${esc(s.originalPath || '')}</span></span>`;
-      const plant = document.createElement('button');
-      plant.className = 'mini';
-      plant.textContent = '种植（动画）';
-      plant.onclick = async () => { await api.plantAnimate(s.id); refresh(); };
-      const harvest = document.createElement('button');
-      harvest.className = 'mini';
-      harvest.textContent = '收获（恢复）';
-      harvest.onclick = async () => { await api.harvest(s.id); refresh(); };
-      const now = document.createElement('button');
-      now.className = 'mini';
-      now.textContent = '立即种好并恢复';
-      now.onclick = async () => { await api.harvest(s.id); refresh(); };
-      el.appendChild(plant); el.appendChild(harvest); el.appendChild(now);
-      box.appendChild(el);
-      iconFor(s.originalPath).then((url) => { if (url) el.querySelector('img').src = url; });
+    const box = $('seeds'); box.replaceChildren();
+    if (!st.stored.length) { box.textContent = '还没有种子，吃下的快捷方式会保存在这里。'; return; }
+    for (const seed of st.stored) {
+      const { el } = row(seed.name, statusText[seed.status] || seed.status);
+      const plant = button('种植', async () => {
+        const result = await api.plantAnimate(seed.id);
+        say(result && result.ok ? '种下了，点“收获”就能恢复。' : '没有种下，请刷新仓库。');
+      });
+      plant.disabled = seed.status !== 'stored';
+      const restore = button(seed.status === 'planting' ? '收获' : '恢复', async () => {
+        const result = await api.harvest(seed.id);
+        say(result && result.ok ? '已放回桌面。同名文件会自动改名保留。' : '恢复未完成，种子仍保存在仓库。');
+      });
+      el.append(plant, restore); box.appendChild(el);
     }
   }
-
   async function scan() {
-    const box = $('candidates');
-    box.innerHTML = '<div class="empty">扫描中…</div>';
-    const r = await api.scan();
-    const st = await api.state();
-    const scanOnly = !!(st && st.settings && st.settings.scanOnly);
-    box.innerHTML = '';
-    if (!r || !r.ok) { box.innerHTML = `<div class="empty">扫描失败：${esc((r && r.reason) || '未知')}</div>`; return; }
-    if (!r.entries.length) { box.innerHTML = '<div class="empty">桌面上没有可吃的快捷方式（只认 .lnk / .url，且排除小猪自身）。</div>'; return; }
-    for (const e of r.entries) {
-      const el = document.createElement('div');
-      el.className = 'item';
-      el.innerHTML = `<img alt=""><span class="nm">${esc(e.name)}<br><span class="st">${esc(e.path)}</span></span>`;
-      const pv = document.createElement('button');
-      pv.className = 'mini';
-      pv.textContent = '模拟吃（预览）';
-      pv.onclick = async () => { await api.preview(e.path, 0); };
-      const eat = document.createElement('button');
-      eat.className = 'mini';
-      eat.textContent = scanOnly ? '吃掉（需先开真实移动）' : '吃掉';
-      eat.disabled = scanOnly;
-      eat.onclick = async () => {
-        const r2 = await api.eat({ name: e.name, path: e.path, hunger: 60 });
-        alert(r2 && r2.ok ? '已移动进小猪肚子（可种植恢复）' : `没有吃：${(r2 && r2.reason) || '未知'}`);
-        refresh();
-      };
-      el.appendChild(pv); el.appendChild(eat);
-      box.appendChild(el);
-      iconFor(e.path).then((url) => { if (url) el.querySelector('img').src = url; });
+    const sequence = ++scanSequence;
+    scanned = true;
+    const box = $('candidates'); box.textContent = '正在定位桌面图标…';
+    const [result, st] = await Promise.all([api.scan(), api.state()]);
+    if (sequence !== scanSequence) return;
+    box.replaceChildren();
+    if (!result || !result.ok) { box.textContent = '暂时读不到桌面，请稍后重新扫描。'; return; }
+    if (!result.entries.length) { box.textContent = '没有可吃的快捷方式，只识别桌面上的 .lnk / .url。'; return; }
+    for (const entry of result.entries) {
+      const located = entry.target && ['desktop', 'test'].includes(entry.target.source);
+      const { el, img } = row(entry.name, located ? '已找到桌面位置' : '未定位，只能预览路线');
+      const preview = button('走过去预览', async () => {
+        say('小猪出发了，点它或拖动它可以取消。');
+        say(resultMessage(await api.requestEat(entry.path, false)));
+      });
+      const eat = button('走过去吃', async () => {
+        say('正在走近、闻一闻、吃下…');
+        say(resultMessage(await api.requestEat(entry.path, true)));
+      });
+      eat.disabled = st.settings.scanOnly || !located;
+      el.append(preview, eat); box.appendChild(el);
+      api.iconOf(entry.path).then(url => { if (url) img.src = url; }).catch(() => {});
     }
-    const note = document.createElement('div');
-    note.className = 'empty';
-    note.textContent = scanOnly ? '当前为扫描模式：只列出候选，不会移动任何真实图标。' : '真实移动已开启。';
-    box.appendChild(note);
   }
-
-  $('btnScan').onclick = scan;
-  $('btnRefresh').onclick = refresh;
+  $('btnScan').onclick = () => scan().catch(() => say('扫描失败，请重试。'));
+  $('btnRefresh').onclick = () => refresh().catch(() => say('刷新失败，请重试。'));
   $('btnRestoreAll').onclick = async () => {
-    const r = await api.restoreAll();
-    alert(`已恢复 ${r && r.restored ? r.restored : 0} 个快捷方式`);
-    refresh();
+    try {
+      const result = await api.restoreAll();
+      const failed = (result.results || []).filter(r => !r.ok).length;
+      say(`已恢复 ${result.restored || 0} 个快捷方式${failed ? `，还有 ${failed} 个需要重试` : '。'}`);
+      await refresh(); if (scanned) await scan();
+    } catch { say('恢复未完成，请刷新仓库后重试。'); }
   };
-
-  // 真实移动开关：勾选前二次确认；取消则回到只扫描
-  $('scanOnly').addEventListener('change', async (ev) => {
-    const wantReal = ev.target.checked; // 勾选 = 开启真实移动
-    if (wantReal) {
-      const ok = window.confirm(
-        '要开启“真实移动”吗？\n\n' +
-        '· 只会移动桌面上的 .lnk / .url 快捷方式\n' +
-        '· 不吃文件夹、照片、文档、压缩包等真实文件\n' +
-        '· 不吃“此电脑/回收站”等系统图标，也不吃小猪自己的快捷方式\n' +
-        '· “吃掉”= 移动到小猪仓库，绝不删除，随时可用“立即恢复全部”还原\n\n' +
-        '确认开启吗？'
-      );
-      if (!ok) { ev.target.checked = false; return; }
-      await api.setSettings({ scanOnly: false });
-    } else {
-      await api.setSettings({ scanOnly: true });
-    }
-    refresh();
+  $('scanOnly').addEventListener('change', async event => {
+    const enabled = event.target.checked;
+    event.target.disabled = true;
+    try { await api.setRealMode(enabled); await refresh(); if (scanned) await scan(); }
+    catch { say('开关保存失败，请重试。'); await refresh(); }
+    finally { event.target.disabled = false; }
   });
-
-  refresh();
+  refresh().catch(() => say('仓库读取失败，请重新打开面板。'));
 })();

@@ -90,6 +90,8 @@
   let sprAccMs = 0;
   let sprSeq = null;           // 测试序列（同一时刻只有一个计时器）
   let sprSeqToken = 0;
+  let iconFlow = null;
+  let iconAnimationDone = null;
 
   function cancelSprSeq() {
     if (sprSeq) { clearTimeout(sprSeq.timer); sprSeq = null; }
@@ -105,7 +107,7 @@
       if (row) { dKind = 'action'; dActionRow = row; dExprKey = null; dCol = 0; dLoops = -1; return; }
     }
     dKind = 'core';
-    dCoreRow = (walking && !currentAction) ? 'walking' : 'idle';
+    dCoreRow = (mvState === 'moving' || mvState === 'icon-moving') && !currentAction ? 'walking' : 'idle';
     dActionRow = null;
     dExprKey = null;
     dCol = 0;
@@ -204,16 +206,17 @@
 
   function canStartIconRitual() {
     return spritesReady && !currentAction && !dragging && !reactionBusy()
-      && mvState === 'idle' && !(sprSeq && sprSeq.timer);
+      && mvState === 'idle' && !(sprSeq && sprSeq.timer) && dKind !== 'icon';
   }
 
   // 播放吃/嫌弃/种植的一整行（每行8帧，播完自动回 idle 第1帧）
   function playIconGroup(row, opts) {
     if (!sprIconReady) { speak('吃图标素材还没加载好', 1600); return false; }
     if (!canStartIconRitual()) { speak('等小猪忙完这一段再吃～', 1500); return false; }
-    pauseAutoForUser();
+    pauseAutoForUser(!!(opts && opts.internal));
     cancelSprSeq();
     dKind = 'icon';
+    sprAccMs = 0;
     dIconRow = row;
     dIconCol = 0;
     dIconLoopsLeft = (opts && opts.loops) || 1;
@@ -223,7 +226,11 @@
 
   function finishIconRitual() {
     overlayIconImg = null;
+    const done = iconAnimationDone;
+    iconAnimationDone = null;
     sprBase();
+    if (done) done(true);
+    if (walking && !autoBlocked()) enterIdle();
   }
 
   function hungerNow() {
@@ -239,7 +246,7 @@
     if (sprSeq && sprSeq.timer) return true;         // “测试新素材”演示
     if (dKind === 'core' && dCoreRow === 'happy_wave' && dLoops > 0) return true; // 挥手两轮
     if (dKind === 'core' && dCoreRow === 'walking') {
-      return !!(walking && mvState === 'moving');    // 只有 BrowserWindow 真在移动才走帧
+      return mvState === 'icon-moving' || (walking && mvState === 'moving');    // 只有 BrowserWindow 真在移动才走帧
     }
     if (dKind === 'icon') return dIconLoopsLeft > 0; // 吃/嫌弃/种植表演中
     return false;
@@ -627,7 +634,7 @@
   function winW() { return Math.max(canvasW, bubbleW); }
   function winH() { return canvasH + (bubbleOpen ? 44 : 0); }
 
-  function applyWindow() {
+  function applyWindow(preserveAnchor = true) {
     const W = winW();
     const H = winH();
     const canvasLeft = (W - canvasW) / 2;
@@ -637,8 +644,21 @@
     winX = nx; winY = ny;
     canvas.style.left = Math.round(canvasLeft) + 'px';
     bubbleEl.style.left = Math.round(canvasLeft + pigCVC()) + 'px';
-    pet.setBounds({ x: nx, y: ny, width: W, height: H });
+    pet.setBounds({ x: nx, y: ny, width: W, height: H, preserveAnchor, anchorX: canvasLeft + pigCVC(), anchorY: canvasTop + pigR.y + pigR.h });
   }
+
+  async function applyInitialWindow() {
+    const W = winW(), H = winH();
+    const ax = (W - canvasW) / 2 + pigCVC(), ay = (bubbleOpen ? 44 : 0) + floorY();
+    await pet.setBounds({ x: Math.round(A.cx - ax), y: Math.round(A.feet - ay), width: W, height: H, anchorX: ax, anchorY: ay, preserveAnchor: false });
+  }
+  function syncPosition(pos) {
+    if (!pos) return;
+    winX = pos.x; winY = pos.y;
+    A.cx = Number.isFinite(pos.anchorX) ? pos.anchorX : pos.x + (winW() - canvasW) / 2 + pigCVC();
+    A.feet = Number.isFinite(pos.anchorY) ? pos.anchorY : pos.y + (bubbleOpen ? 44 : 0) + floorY();
+  }
+  if (pet.onPosition) pet.onPosition(syncPosition);
 
   async function clampIntoWorkArea() {
     const wa = await pet.getWorkArea();
@@ -652,7 +672,7 @@
     if (left + winW() > wa.x + wa.width) dx = wa.x + wa.width - winW() - left;
     if (top < wa.y) dy = wa.y - top;
     if (top + winH() > wa.y + wa.height) dy = wa.y + wa.height - winH() - top;
-    if (dx || dy) { A.cx += dx; A.feet += dy; applyWindow(); }
+    if (dx || dy) { A.cx += dx; A.feet += dy; applyWindow(false); }
   }
 
   function setSizePreset(id) {
@@ -1651,14 +1671,15 @@
   function clearIdleTimer() { if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; } }
   function cancelWindowMotion() { if (pet && pet.cancelMove) pet.cancelMove(); }
   function autoBlocked() {
-    return mode === 'none' || dragging || reactionBusy() || !!currentAction || (!!sprSeq && !!sprSeq.timer);
+    return mode === 'none' || (iconFlow && iconFlow.busy) || dKind === 'icon' || dragging || reactionBusy() || !!currentAction || (!!sprSeq && !!sprSeq.timer);
   }
 
   // 立即停止任何移动与待机计时（进入任意非 walking 状态时调用）
-  function pauseAutoForUser() {
+  function pauseAutoForUser(keepMeal = false) {
+    if (!keepMeal && iconFlow) iconFlow.cancel();
     clearIdleTimer();
     cancelWindowMotion();
-    if (mvState === 'moving') {
+    if (mvState === 'moving' || mvState === 'icon-moving') {
       mvState = 'idle';
       spriteIdleNow();
     }
@@ -1684,12 +1705,12 @@
   async function chooseAndStartMove() {
     const [wa, pos] = await Promise.all([pet.getWorkArea(), pet.getPosition()]);
     if (!wa || !pos) return;
-    if (!walking || autoBlocked()) return;
+    if (!walking || autoBlocked() || mvState !== 'idle') return;
 
     const minX = wa.x + 10;
-    const maxX = wa.x + wa.width - canvasW - 10;
+    const maxX = wa.x + wa.width - winW() - 10;
     const minY = wa.y + 10;
-    const maxY = wa.y + wa.height - canvasH - 10;
+    const maxY = wa.y + wa.height - winH() - 10;
     if (maxX <= minX || maxY <= minY) { enterIdle(); return; }
 
     const curX = pos.x;
@@ -1723,6 +1744,7 @@
 
   // 主进程移动完成（仅一次）→ idle 并固定等待
   function onMoveDone(payload) {
+    syncPosition(payload);
     if (mvState !== 'moving') return;
     mvState = 'idle';
     spriteIdleNow();
@@ -1790,6 +1812,7 @@
 
     if (!dragging) {
       dragging = true;
+      if (dKind === 'icon') { dIconLoopsLeft = 0; finishIconRitual(); }
       if (currentAction) interruptAction(false); // 拖动时暂停动作，松手回待机
       dragBase = { ax: A.cx, feet: A.feet, sx: event.screenX, sy: event.screenY };
     }
@@ -1805,7 +1828,7 @@
           pendingMove = null;
           A.cx = m.ax;
           A.feet = m.feet;
-          applyWindow();
+          applyWindow(false);
         }
       });
     }
@@ -1838,6 +1861,7 @@
 
   function onPointerCancel() {
     clearDragState();
+    if (walking && !autoBlocked()) enterIdle();
   }
 
   /* ================= 右键菜单 ================= */
@@ -1938,7 +1962,7 @@
   let lastAutoActionAt = Date.now();
   function maybeAutoAction() {
     const nowT = Date.now();
-    if (currentAction || actionReaction || walking || dragging) return;
+    if (currentAction || actionReaction || walking || dragging || (iconFlow && iconFlow.busy) || dKind === 'icon') return;
     if (nowT - lastInteractMs < 12000) return;
     if (nowT - lastAutoActionAt < 25000) return;
     lastAutoActionAt = nowT;
@@ -2131,7 +2155,7 @@
       canvas.width = canvasW; canvas.height = canvasH;
       const wa0 = await pet.getWorkArea();
       if (wa0) { A.cx = wa0.x + wa0.width - canvasW / 2; A.feet = wa0.y + wa0.height - 12; }
-      applyWindow();
+      applyWindow(false);
       requestAnimationFrame(frameLoop);
       setInterval(periodic, 3000);
       if (pet.onMoveComplete) moveUnsub = pet.onMoveComplete(onMoveDone);
@@ -2152,7 +2176,7 @@
       if (saved.anchor) { A.cx = saved.anchor.cx; A.feet = saved.anchor.feet; }
       else { A.cx = wa.x + wa.width - canvasW + pigCVC() - 24; A.feet = wa.y + wa.height - 12; }
     } else { A.cx = pigCVC() + 120; A.feet = 120 + pigR.y + pigR.h; }
-    applyWindow();
+    await applyInitialWindow();
     await clampIntoWorkArea();
 
     moodName = moodVal.happiness >= 60 ? 'happy' : 'bored';
@@ -2165,7 +2189,11 @@
     if (window.iconAPI && window.iconAPI.onCommand) {
       window.iconAPI.onCommand(async (cmd) => {
         if (!cmd) return;
-        if (cmd.type === 'plant') {
+        if (cmd.type === 'cancel-meal') { iconFlow.cancel(); return; }
+        if (cmd.type === 'eat') {
+          const result = await iconRitualOnce(cmd.real, cmd.path);
+          await window.iconAPI.mealResult(cmd.id, result);
+        } else if (cmd.type === 'plant') {
           if (playIconGroup(2, { loops: 1 })) speak('种下啦～长好后点“收获”恢复', 2200);
         } else if (cmd.type === 'preview') {
           let img = null;
@@ -2189,43 +2217,91 @@
   }
 
   /* ================= 图标仪式（挑食地吃 / 种植） ================= */
-  async function iconRitualOnce(real) {
-    if (!window.iconAPI) return { ok: false, reason: 'no-icon-api' };
-    const st = await window.iconAPI.state();
-    const scan = await window.iconAPI.scan();
-    if (!scan || !scan.ok || !scan.entries || !scan.entries.length) return { ok: false, reason: 'no-candidates' };
-    const entry = scan.entries[Math.floor(Math.random() * scan.entries.length)];
-    const ev = await window.iconAPI.evaluate({ path: entry.path, hunger: hungerNow() });
-    const iconUrl = await window.iconAPI.iconOf(entry.path);
-    let img = null;
-    if (iconUrl) { try { img = await loadImage(iconUrl); } catch (e) { img = null; } }
-
-    if (!ev || !ev.ok) {
-      // 分数低：走近后播放第2行“闻/犹豫/摇头/嫌弃”，然后离开（不做任何移动文件操作）
-      if (playIconGroup(1, { loops: 1, iconImg: img })) speak('唔…这个不太想吃', 1800);
-      return { ok: false, reason: (ev && ev.reason) || 'refused', score: ev && ev.score };
-    }
-    let moved = null;
-    const scanOnly = !!(st && st.settings && st.settings.scanOnly);
-    if (real && !scanOnly) {
-      moved = await window.iconAPI.eat({ name: entry.name, path: entry.path, hunger: hungerNow() });
-      if (!moved || !moved.ok) {
-        if (playIconGroup(1, { loops: 1, iconImg: img })) speak('唔…吃不到', 1600);
-        return { ok: false, reason: moved && moved.reason };
-      }
-    }
-    if (playIconGroup(0, { loops: 1, iconImg: img })) {
-      speak(scanOnly ? '（预览）啊呜～这个好吃！' : '啊呜～吃掉啦！', 2000);
-    }
-    return { ok: true, scanOnly, moved, score: ev.score, name: entry.name };
+  async function walkToDesktopIcon(entry, signal) {
+    const target = entry && entry.target;
+    if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.y) || signal.aborted) return false;
+    const [wa, pos] = await Promise.all([pet.getWorkArea(target), pet.getPosition()]);
+    if (!wa || !pos || signal.aborted) return false;
+    syncPosition(pos);
+    clearIdleTimer();
+    await pet.cancelMove();
+    if (signal.aborted) return false;
+    // A 是屏幕上的锚点；窗口目的地减的是窗口内部偏移，不能再次减 A。
+    const offsetX = (winW() - canvasW) / 2 + pigCVC();
+    const offsetY = (bubbleOpen ? 44 : 0) + floorY();
+    const desiredCenterX = target.x + (A.cx <= target.x ? -48 : 48);
+    const tx = clamp(Math.round(desiredCenterX - offsetX), wa.x + 10, Math.max(wa.x + 10, wa.x + wa.width - winW() - 10));
+    const ty = clamp(Math.round(target.y + 24 - offsetY), wa.y + 10, Math.max(wa.y + 10, wa.y + wa.height - winH() - 10));
+    const dist = Math.hypot(tx - pos.x, ty - pos.y);
+    if (dist < 8) return true;
+    dir = tx >= pos.x ? 1 : -1;
+    mvState = 'icon-moving';
+    spriteWalkNow();
+    const duration = clamp(Math.round(dist / 140 * 1000), 1500, 8000);
+    return new Promise(resolve => {
+      let settled = false, unsubscribe = null;
+      const finish = ok => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (unsubscribe) unsubscribe();
+        signal.removeEventListener('abort', abort);
+        mvState = 'idle';
+        spriteIdleNow();
+        resolve(ok);
+      };
+      const abort = () => { pet.cancelMove(); finish(false); };
+      const timer = setTimeout(abort, duration + 1500);
+      signal.addEventListener('abort', abort, { once: true });
+      unsubscribe = pet.onMoveComplete(pos => { syncPosition(pos); finish(!signal.aborted); });
+      pet.startMove(tx, ty, duration, target).then(ok => { if (ok === false) finish(false); }).catch(() => finish(false));
+    });
   }
 
-  // 供面板/测试使用
+  function animateMeal(row, img, signal) {
+    if (signal.aborted) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const finish = ok => {
+        signal.removeEventListener('abort', abort);
+        if (iconAnimationDone === finish) iconAnimationDone = null;
+        resolve(ok);
+      };
+      const abort = () => {
+        dIconLoopsLeft = 0;
+        overlayIconImg = null;
+        sprBase();
+        finish(false);
+      };
+      if (!playIconGroup(row, { loops: 1, iconImg: img, internal: true })) { resolve(false); return; }
+      iconAnimationDone = finish;
+      signal.addEventListener('abort', abort, { once: true });
+    });
+  }
+
+  iconFlow = new window.ClawdIconFlow({
+    pause: async () => { pauseAutoForUser(true); clearSpeech(); await pet.cancelMove(); },
+    prepare: options => window.iconAPI.prepare({ ...options, hunger: hungerNow() }),
+    loadIcon: async path => { try { const url = await window.iconAPI.iconOf(path); return url ? await loadImage(url) : null; } catch { return null; } },
+    walk: walkToDesktopIcon,
+    animate: animateMeal,
+    commit: token => window.iconAPI.eat(token),
+    release: token => window.iconAPI.release(token),
+    resume: () => { if (walking && !autoBlocked()) enterIdle(); },
+  });
+  async function iconRitualOnce(real, path) {
+    if (!window.iconAPI || !sprIconReady) return { ok: false, reason: 'animation-unavailable' };
+    if (currentAction || dragging || reactionBusy() || (sprSeq && sprSeq.timer)) return { ok: false, reason: 'busy' };
+    const result = await iconFlow.run({ real: !!real, path });
+    if (result.ok) speak(result.preview ? '（预览）啊呜～' : '吃掉啦，随时能种回来！', 1800);
+    else if (result.reason === 'not-hungry') speak('唔…这个不太想吃', 1600);
+    return result;
+  }
   window.__clawdIcons = {
-    preview: (row) => playIconGroup(Number(row) || 0, { loops: 1 }),
-    eatOnce: (real) => iconRitualOnce(!!real),
-    simulate: () => iconRitualOnce(false),
-    state: () => (window.iconAPI ? window.iconAPI.state() : null),
+    preview: row => playIconGroup(Number(row) || 0, { loops: 1 }),
+    eatOnce: (real, path) => iconRitualOnce(!!real, path),
+    simulate: path => iconRitualOnce(false, path),
+    cancel: () => iconFlow.cancel(),
+    state: () => window.iconAPI ? window.iconAPI.state() : null,
   };
 
   // 供冒烟/调试钩子
@@ -2240,6 +2316,7 @@
       mode, sizePreset, stateName, moodName, moodVal: { ...moodVal },
       flower: flower ? { ...flower } : null,
       walking, mvState,
+      mealBusy: iconFlow.busy,
       frameCol: dCol,
       movesDone,
       moveHistory: moveHistory.map((m) => ({ x: m.x, y: m.y })),

@@ -1,5 +1,5 @@
 # 依赖与构建产物（体积大、可由 npm 还原）
-node_modules/
+node_modules
 dist/
 github-build-output/
 
@@ -34,3 +34,8 @@ credentials.json
 
 # 本地个人数据（不上传）
 微信图片_*.jpg
+
+# 自动验证的截图和结果
+test-results/
+core
+core.*

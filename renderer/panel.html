@@ -19,7 +19,7 @@
     <div class="row">
       <label class="chk">
         <input id="scanOnly" type="checkbox">
-        <span>真实移动（取消勾选即回到“只扫描”安全模式）</span>
+        <span>允许真实移动（取消勾选立即停止）</span>
       </label>
     </div>
     <div class="row note">开启前会二次确认：只移动桌面上的 .lnk / .url 快捷方式，绝不删除，随时可一键恢复。</div>
@@ -29,6 +29,8 @@
       <button id="btnRestoreAll" class="danger">立即恢复全部</button>
     </div>
   </section>
+
+  <p id="status" role="status" aria-live="polite">先扫描，试一次“走过去预览”。</p>
 
   <section class="card">
     <h2>桌面候选（仅 .lnk / .url）</h2>

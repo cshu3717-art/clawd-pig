@@ -1,6 +1,12 @@
 'use strict';
 /* 打包前回归：确认 fs 版 app:// 协议下渲染页仍能加载、素材仍就绪（自动退出） */
 const { app, BrowserWindow } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
+const tmp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'clawd-assets-'));
+process.env.CLAWD_TEST_USERDATA = tmp;
+process.env.CLAWD_TEST_DESKTOP = path.join(tmp, 'desktop');
+fs.mkdirSync(process.env.CLAWD_TEST_DESKTOP);
 let failed = false;
 app.on('web-contents-created', (_e, c) => {
   c.on('did-fail-load', (_ev, code, desc, url) => { failed = true; console.log(`[did-fail-load] ${code} ${desc} ${url}`); });
@@ -19,7 +25,8 @@ setTimeout(() => {
     console.log('SPRITES', /"sprites":true/.test(s) ? 'OK' : 'MISSING');
     console.log(`SMOKE failed=${failed} visible=${w.isVisible()}`);
     console.log('SMOKE-OK (auto quit)');
-    app.exit(failed ? 3 : 0);
+    const state = JSON.parse(s);
+    app.exit(failed || !state.sprites || !state.iconSheetReady ? 3 : 0);
   }).catch((e) => { console.log('FAIL', String(e)); app.exit(2); });
 }, 5000);
 process.on('uncaughtException', (e) => { console.error('EXC', e); app.exit(2); });
