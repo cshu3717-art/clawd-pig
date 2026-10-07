@@ -39,10 +39,11 @@ npm run dist
 
 GitHub Actions 的 **Build Windows Installers** 可手动运行，推送 `fix/**`、`feature/**` 和 `main` 的代码改动也会触发。工作流先运行测试，再生成 x64 的 NSIS 安装版和 Portable 便携版。产物在该次运行的 `clawd-pig-windows-x64` 附件中；不签名、不创建 Release。
 
+2026-10-07 已上传到 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions` 分支，Windows 自动测试 40/40 通过，NSIS 与 Portable 构建成功：[构建记录与安装包](https://github.com/cshu3717-art/clawd-pig/actions/runs/37631198723)。在页面底部 **Artifacts** 点击 **clawd-pig-windows-x64** 下载，解压后选择 `Setup` 安装版或 `Portable` 免安装版。该次产物保留至 2026-11-06，之后可重新运行工作流。
+
 ## 仍需完成的内容
 
 - 在 Windows 的实际 Explorer 桌面验证图标定位、125%/150% 缩放、多显示器和 OneDrive 桌面。临时桌面测试无法替代这一步。
-- 在有仓库写权限的账号下推送本分支，运行 Windows Actions 并下载安装包。
 - 按此前阶段安排，天气穿搭、怒气条与连续吃五个、新的 `generated-v2` 素材接入保留为下一阶段；本版本不将这些标为已完成。
 
 本轮已完成的验证和未执行项目见 [VALIDATION.md](VALIDATION.md)。
