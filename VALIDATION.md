@@ -2,10 +2,10 @@
 
 ## 本轮已执行
 
-- Node 自动测试：25/25 通过。覆盖动画事务、取消、播种失败回滚、五个图标串行追逐，以及天气查询合并、切换城市、关闭查询、离线和缓存过期。
-- Electron 应用检查：51/51 通过，使用临时桌面与独立配置目录；项目见下方。
+- Node 自动测试：Linux 与 Windows 均 25/25 通过。覆盖动画事务、取消、播种失败回滚、五个图标串行追逐，以及天气查询合并、切换城市、关闭查询、离线和缓存过期。
+- Electron 应用检查：Linux 与 Windows 均 51/51 通过，使用临时桌面与独立配置目录；项目见下方。
 - 源码语法、package/lockfile 版本、运行时模块、原有素材和 Windows NSIS + Portable 打包配置检查通过。
-- 已检查雨天、雪天配饰与面板截图。配饰跟随当前精灵坐标绘制；Linux 测试环境缺少中文字形，中文界面文字仍由 DOM 检查，Windows 截图需在构建产物中复核。
+- 已检查雨天、雪天配饰与面板截图。配饰跟随当前精灵坐标绘制；Linux 测试环境缺少中文字形，中文界面文字仍由 DOM 检查，Windows 截图已经随测试产物上传，尚未在本地查看（产物传输返回 HTTP 403）。
 - 原始 PNG 未修改。原先十六套天气图片读取失败，本版使用程序绘制的像素配饰，不声称已接入该素材包。
 
 ## 测试边界
@@ -18,7 +18,15 @@
 
 ## Windows 构建
 
-代码推送至 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions` 后，工作流会重复运行 Node、Electron 检查，再生成未签名的 `小猪桌宠-Setup-1.1.0-x64.exe` 与 `小猪桌宠-Portable-1.1.0-x64.exe`。当前这份交接先记录已完成的本地结果，Windows 结果以工作流为准。
+2026-10-08：代码提交 `6205cff7a4c90fa7e7cb1d9338b086ea61de41c3` 已推送至 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions`。
+
+[Windows 构建与 76 项检查全部成功](https://github.com/cshu3717-art/clawd-pig/actions/runs/37786678568)。未签名，不创建 Release。
+
+- `小猪桌宠-Setup-1.1.0-x64.exe`：NSIS 安装版。
+- `小猪桌宠-Portable-1.1.0-x64.exe`：免安装版。
+- 两个程序在该次运行的 `clawd-pig-windows-x64` 附件，保留至 2026-11-07。
+- 安装包 ZIP 的 GitHub 记录 SHA-256：`bef89a498695c82049c8fabbdbaced4c16785cd86561f8037d74c8621f46ecc1`。产物已在 GitHub 生成；本地传输返回 HTTP 403，未声称完成本地校验或实机运行。
+- 测试报告与截图在 `clawd-pig-test-results` 附件，保留至 2026-10-22。
 
 [查看该分支构建](https://github.com/cshu3717-art/clawd-pig/actions/workflows/build-windows.yml?query=branch%3Afix%2Fcomplete-icon-interactions)
 

@@ -51,6 +51,8 @@ GitHub Actions 的 **Build Windows Installers** 可手动运行，推送 `fix/**
 
 代码更新在 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions` 分支。[打开该分支的 Windows 构建](https://github.com/cshu3717-art/clawd-pig/actions/workflows/build-windows.yml?query=branch%3Afix%2Fcomplete-icon-interactions)，选择最近一次成功运行，在页面底部 **Artifacts** 点击 **clawd-pig-windows-x64** 下载，解压后选择 `Setup` 安装版或 `Portable` 免安装版。安装包保留 30 天，可重新运行工作流。
 
+2026-10-08，v1.1.0 在 Windows 通过 **25 项 Node 测试 + 51 项 Electron 检查**，NSIS 与 Portable 构建成功：[这次的安装包与测试记录](https://github.com/cshu3717-art/clawd-pig/actions/runs/37786678568)。选择附件 `clawd-pig-windows-x64`；安装包文件名包含 `1.1.0`，保留至 2026-11-07。
+
 ## 仍需完成的内容
 
 - 在 Windows 的实际 Explorer 桌面验证图标定位、125%/150% 缩放、多显示器和 OneDrive 桌面。临时桌面测试无法替代这一步。
