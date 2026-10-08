@@ -17,21 +17,23 @@
       try {
         await this.api.pause();
         check();
-        const meal = await this.api.prepare(options);
+        const planting = options.kind === 'plant';
+        const meal = await (planting ? this.api.preparePlant(options.token) : this.api.prepare(options));
         token = meal && meal.token;
         check();
         if (!meal || !meal.ok) return meal || { ok: false, reason: 'unavailable' };
-        const image = await this.api.loadIcon(meal.entry.path);
+        const image = planting ? null : await this.api.loadIcon(meal.entry.path);
         check();
-        const reached = await this.api.walk(meal.entry, signal);
+        const reached = planting || await this.api.walk(meal.entry, signal);
         check();
         if (!reached) return { ok: false, reason: 'target-unreachable' };
-        const animated = await this.api.animate(meal.accepted ? 0 : 1, image, signal);
+        const animated = await this.api.animate(planting ? 2 : meal.accepted ? 0 : 1, image, signal);
         check();
         if (!animated) {
           return { ok: false, reason: 'animation-unavailable' };
         }
         check();
+        if (planting) return await this.api.commitPlant(token);
         if (!meal.accepted) return { ok: false, reason: 'not-hungry', name: meal.entry.name };
         if (!meal.real) return { ok: true, preview: true, name: meal.entry.name };
         return await this.api.commit(token);
@@ -47,6 +49,40 @@
       }
     }
   }
-  if (typeof module !== 'undefined' && module.exports) module.exports = { IconFlow };
-  else root.ClawdIconFlow = IconFlow;
+  class RageFlow {
+    constructor(api) { this.api = api; this.active = null; }
+    get busy() { return this.active !== null; }
+    cancel() {
+      if (!this.active) return;
+      this.active.cancelled = true;
+      this.api.cancelStep();
+      if (this.active.token) Promise.resolve(this.api.end(this.active.token)).catch(() => {});
+    }
+    async run() {
+      if (this.busy) return { ok: false, reason: 'busy', count: 0 };
+      const task = { cancelled: false, token: null };
+      this.active = task;
+      let count = 0, preview = true;
+      try {
+        const batch = await this.api.begin();
+        task.token = batch && batch.token;
+        if (!batch || !batch.ok) return { ...batch, count };
+        preview = !batch.real;
+        for (let index = 0; index < 5; index++) {
+          if (task.cancelled) return { ok: false, reason: 'cancelled', count, preview };
+          const result = await this.api.step({ rageToken: task.token, real: batch.real });
+          if (!result.ok) return { ...result, count, preview };
+          count++;
+          if (this.api.progress) this.api.progress(count, preview);
+        }
+        return { ok: true, count, preview };
+      } catch { return { ok: false, reason: task.cancelled ? 'cancelled' : 'failed', count, preview }; }
+      finally {
+        try { if (task.token) await this.api.end(task.token); } catch { /* 主窗口退出时清理连接可能已关闭 */ }
+        finally { if (this.active === task) this.active = null; }
+      }
+    }
+  }
+  if (typeof module !== 'undefined' && module.exports) module.exports = { IconFlow, RageFlow };
+  else { root.ClawdIconFlow = IconFlow; root.ClawdRageFlow = RageFlow; }
 })(typeof window !== 'undefined' ? window : globalThis);

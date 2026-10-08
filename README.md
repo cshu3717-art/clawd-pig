@@ -2,7 +2,17 @@
 
 Windows 桌面小猪：自由走动和停驻、触摸耳朵/鼻子/肚子、画画、种花、浇水、摘花、送花、刷视频，以及可恢复的吃快捷方式。
 
-## 本次修复：v1.0.2
+## 本次更新：v1.1.0
+
+- **种植可以可靠地取消和重试**：播种动画全部完成后才记录为“已种好”；占用时拒绝重复操作；取消、恢复或保存失败不会留下假成功状态。
+- **怒气温度计与追图标**：揪耳朵增加 25 点，摸肚子减少 15 点，碰鼻子减少 8 点；安静后逐渐消气。满 100 后逐个走近并吃最多 5 个不同图标，可以触摸、拖动或用面板停止。重新启动不会自动发怒。
+- **天气换装**：右键 →“天气与换装（选择城市）”，搜索并核对城市、省份和国家。支持雨帽、雪天/寒冷围巾帽、晴天帽、风天围巾、夜帽、多云围巾。配饰使用小猪当前精灵的坐标，跟随走动、转向和大小；专用动作场景暂时卸下，结束后恢复。
+
+怒气开关默认开启，但真实文件移动仍由“允许真实移动”控制。不开启时只演示；开启时，怒气批次与日常每日 3 个的进食额度分开计算，每轮最多 5 个，至少间隔 90 秒。所有吃下的快捷方式都保存在仓库中，支持一键恢复。
+
+天气由 [Open-Meteo](https://open-meteo.com/) 提供模型估计，城市搜索数据来自 [GeoNames](https://www.geonames.org/)。只发送手选城市的名称或经纬度，不请求设备精确定位。每 30 分钟查询，手动刷新最短间隔 1 分钟；断网明确显示旧数据，缓存超过 3 小时便卸下配饰。可关闭查询，城市选择保存在本机。接口说明：[天气](https://open-meteo.com/en/docs)、[城市搜索](https://open-meteo.com/en/docs/geocoding-api)。
+
+### 延续的 v1.0.2 修复
 
 基于 `sariel24/clawd-pig` 的 `0e49728`，续接未推送的 `381de25` 修复思路。用户电脑上 9 月 14 日那轮改动没有同步到该仓库；本分支不覆盖那份本机工程，也未修改原有 PNG。合并之前如有更新源码，应先比对。
 
@@ -39,11 +49,11 @@ npm run dist
 
 GitHub Actions 的 **Build Windows Installers** 可手动运行，推送 `fix/**`、`feature/**` 和 `main` 的代码改动也会触发。工作流先运行测试，再生成 x64 的 NSIS 安装版和 Portable 便携版。产物在该次运行的 `clawd-pig-windows-x64` 附件中；不签名、不创建 Release。
 
-2026-10-07 已上传到 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions` 分支，Windows 自动测试 40/40 通过，NSIS 与 Portable 构建成功：[构建记录与安装包](https://github.com/cshu3717-art/clawd-pig/actions/runs/37631198723)。在页面底部 **Artifacts** 点击 **clawd-pig-windows-x64** 下载，解压后选择 `Setup` 安装版或 `Portable` 免安装版。该次产物保留至 2026-11-06，之后可重新运行工作流。
+代码更新在 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions` 分支。[打开该分支的 Windows 构建](https://github.com/cshu3717-art/clawd-pig/actions/workflows/build-windows.yml?query=branch%3Afix%2Fcomplete-icon-interactions)，选择最近一次成功运行，在页面底部 **Artifacts** 点击 **clawd-pig-windows-x64** 下载，解压后选择 `Setup` 安装版或 `Portable` 免安装版。安装包保留 30 天，可重新运行工作流。
 
 ## 仍需完成的内容
 
 - 在 Windows 的实际 Explorer 桌面验证图标定位、125%/150% 缩放、多显示器和 OneDrive 桌面。临时桌面测试无法替代这一步。
-- 按此前阶段安排，天气穿搭、怒气条与连续吃五个、新的 `generated-v2` 素材接入保留为下一阶段；本版本不将这些标为已完成。
+- 原先生成的十六套天气图片和 `generated-v2` 新素材尚未接入；v1.1.0 使用跟随原精灵的像素配饰，并保留全部原始 PNG。
 
 本轮已完成的验证和未执行项目见 [VALIDATION.md](VALIDATION.md)。

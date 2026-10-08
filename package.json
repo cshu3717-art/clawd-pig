@@ -1,7 +1,7 @@
 {
   "name": "clawd-pig-desktop-pet",
   "productName": "小猪桌宠",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "小猪桌宠：透明无边框置顶桌面宠物，可拖动、自主移动、点击反应、动作/表情、吃图标与种植恢复。",
   "main": "main.js",
   "private": true,

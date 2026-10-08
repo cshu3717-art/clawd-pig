@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:;">
-  <title>小猪 Clawd · 图标仓库与种植</title>
+  <title>小猪 Clawd · 天气与图标仓库</title>
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
@@ -12,6 +12,18 @@
     <h1>🐷 小猪 Clawd · 图标仓库</h1>
     <div id="mode" class="badge">读取中…</div>
   </header>
+
+  <section class="card">
+    <h2>跟着天气换装</h2>
+    <label for="cityQuery">先选一座城市</label>
+    <div class="row"><input id="cityQuery" type="search" placeholder="例如：太原 / Taiyuan" maxlength="100"><button id="btnCitySearch">搜索</button></div>
+    <div id="cityChoices" class="row" hidden><select id="citySelect" aria-label="选择城市"></select><button id="btnCitySave">使用这座城市</button></div>
+    <p id="cityStatus" class="note" role="status">输入城市后搜索，选择对应省份和国家。</p>
+    <label class="chk"><input id="weatherEnabled" type="checkbox"><span>自动查询天气并换装</span></label>
+    <p id="weatherStatus" role="status" aria-live="polite">读取天气设置…</p>
+    <div class="btns"><button id="btnWeatherRefresh">刷新天气</button><button id="btnWeatherSource">天气来源：Open-Meteo</button></div>
+    <p class="note">选择城市后每 30 分钟联网查询一次，手动刷新间隔 1 分钟，不获取精确定位。天气为模型估计；断网暂留最近 3 小时内的装扮。搜索地点由 GeoNames 提供。动作场景结束后恢复天气配饰。</p>
+  </section>
 
   <section class="card">
     <div class="row"><span class="k">桌面目录</span><span id="deskPath" class="v">—</span></div>
@@ -23,9 +35,12 @@
       </label>
     </div>
     <div class="row note">开启前会二次确认：只移动桌面上的 .lnk / .url 快捷方式，绝不删除，随时可一键恢复。</div>
+    <label class="chk"><input id="rageEnabled" type="checkbox"><span>生气时依次追吃图标（最多 5 个）</span></label>
+    <p class="note">揪耳朵增加怒气，摸肚子消气。怒气满后开始追图标；只预览时不会移动文件。真实移动每轮至少间隔 90 秒，独立于日常进食额度，可随时停止。</p>
     <div class="btns">
       <button id="btnScan">扫描桌面候选</button>
       <button id="btnRefresh">刷新仓库</button>
+      <button id="btnCancel">停止当前动作</button>
       <button id="btnRestoreAll" class="danger">立即恢复全部</button>
     </div>
   </section>
@@ -43,5 +58,6 @@
   </section>
 
   <script src="panel.js"></script>
+  <script src="weather-panel.js"></script>
 </body>
 </html>

@@ -64,6 +64,39 @@ test('异常后释放占用，后续操作仍可开始', async () => {
   assert.equal(flow.busy, false);
   assert.deepEqual(calls.slice(-2), ['release', 'resume']);
 });
+test('种植等动画结束再提交，期间不能并发吃图标', async () => {
+  const animation = deferred();
+  let committed = false, row;
+  const { flow, calls } = fixture({
+    preparePlant: async () => ({ ok: true, token: 'seed' }),
+    animate: async n => { row = n; return animation.promise; },
+    commitPlant: async () => { committed = true; return { ok: true }; },
+  });
+  const planting = flow.run({ kind: 'plant', token: 'seed' });
+  await new Promise(r => setImmediate(r));
+  assert.equal(committed, false);
+  assert.equal(row, 2);
+  assert.equal((await flow.run({ real: true })).reason, 'busy');
+  animation.resolve(true);
+  assert.equal((await planting).ok, true);
+  assert.equal(committed, true);
+  assert.ok(!calls.includes('walk'));
+});
+test('取消播种后，即使动画迟到完成也不能变成已种植', async () => {
+  const animation = deferred();
+  let committed = false;
+  const { flow } = fixture({
+    preparePlant: async () => ({ ok: true, token: 'seed' }),
+    animate: () => animation.promise,
+    commitPlant: async () => { committed = true; return { ok: true }; },
+  });
+  const planting = flow.run({ kind: 'plant', token: 'seed' });
+  await new Promise(r => setImmediate(r));
+  flow.cancel(); animation.resolve(true);
+  assert.equal((await planting).reason, 'cancelled');
+  assert.equal(committed, false);
+  assert.equal(flow.busy, false);
+});
 const screen = { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1280, height: 800 } }), screenToDipPoint: p => ({ x: p.x / 2, y: p.y / 2 }) };
 test('中文名称及隐藏扩展名匹配，物理像素转 DIP', () => {
   const [entry] = attachTargets([{ name: '学习软件.lnk' }], [{ name: '学习软件', x: -400, y: 80, width: 100, height: 100 }], screen);

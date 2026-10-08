@@ -12,13 +12,14 @@
     'position-unavailable': '没有识别到这个图标的实际位置，可以先预览。',
     'target-unreachable': '这次没有走到目标旁，快捷方式仍在桌面。',
     'target-changed': '快捷方式刚刚变动了，请重新扫描。',
-    cancelled: '已取消，尚未吞下的快捷方式仍在桌面。',
-    'animation-unavailable': '吃图标素材未就绪，没有移动快捷方式。',
-    'storage-write-failed': '仓库记录保存失败，快捷方式仍在桌面。',
+    cancelled: '已取消本次操作，快捷方式可以从原位置或仓库恢复。',
+    'animation-unavailable': '动作素材未就绪，请稍后再试。',
+    'storage-write-failed': '仓库记录保存失败，本次操作没有提交。',
+    timeout: '小猪没有及时完成动作，已取消，请重试。',
     'no-candidates': '这个快捷方式已不在候选列表，请重新扫描。',
     failed: '没有完成操作，请重试。',
   };
-  const statusText = { stored: '已吃下，可种植', planting: '种植中，可收获', moving: '处理中' };
+  const statusText = { stored: '已吃下，可种植', planting: '已种好，可收获', moving: '处理中' };
   function say(message) { $('status').textContent = message; }
   function resultMessage(result) {
     if (!result || !result.ok) return messages[result && result.reason] || '操作未完成，请刷新后重试。';
@@ -54,13 +55,15 @@
     $('mode').textContent = scanOnly ? '只预览' : '真实移动已开启';
     $('mode').className = 'badge' + (scanOnly ? '' : ' warn');
     $('scanOnly').checked = !scanOnly;
+    $('rageEnabled').checked = st.settings.rageEnabled;
     const box = $('seeds'); box.replaceChildren();
     if (!st.stored.length) { box.textContent = '还没有种子，吃下的快捷方式会保存在这里。'; return; }
     for (const seed of st.stored) {
       const { el } = row(seed.name, statusText[seed.status] || seed.status);
       const plant = button('种植', async () => {
+        say('小猪正在播种，动作完成后就能收获。');
         const result = await api.plantAnimate(seed.id);
-        say(result && result.ok ? '种下了，点“收获”就能恢复。' : '没有种下，请刷新仓库。');
+        say(result && result.ok ? '种好了，点“收获”就能恢复。' : resultMessage(result));
       });
       plant.disabled = seed.status !== 'stored';
       const restore = button(seed.status === 'planting' ? '收获' : '恢复', async () => {
@@ -97,6 +100,12 @@
   }
   $('btnScan').onclick = () => scan().catch(() => say('扫描失败，请重试。'));
   $('btnRefresh').onclick = () => refresh().catch(() => say('刷新失败，请重试。'));
+  $('btnCancel').onclick = async () => { await api.cancel(); say('已停止当前动作。'); await refresh(); };
+  $('rageEnabled').onchange = async event => {
+    try { await api.setSettings({ rageEnabled: event.target.checked }); }
+    catch { say('怒气开关保存失败，请重试。'); }
+    await refresh();
+  };
   $('btnRestoreAll').onclick = async () => {
     try {
       const result = await api.restoreAll();
@@ -113,4 +122,9 @@
     finally { event.target.disabled = false; }
   });
   refresh().catch(() => say('仓库读取失败，请重新打开面板。'));
+  let updateTimer;
+  api.onChanged(() => {
+    clearTimeout(updateTimer);
+    updateTimer = setTimeout(() => refresh().catch(() => say('仓库读取失败，请刷新重试。')), 80);
+  });
 })();

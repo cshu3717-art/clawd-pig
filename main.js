@@ -12,10 +12,11 @@
  * validation-extended-v3*.json 布局播放；不存在则由渲染进程回退到 clawd-pig.png。
  */
 
-const { app, BrowserWindow, ipcMain, screen, Menu, protocol, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Menu, protocol, dialog, net, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { locate } = require('./lib/desktop-targets');
+const { WeatherService, INTERVAL: WEATHER_INTERVAL } = require('./lib/weather');
 
 const ASSET_DIR = __dirname; // 素材与代码同目录（当前工作区）
 const SPRITE_DIR = path.join(__dirname, 'assets');
@@ -173,6 +174,8 @@ function createWindow() {
   // 安全：拦截新窗口与页面导航
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
+  win.webContents.on('render-process-gone', () => cancelMeal());
+  win.webContents.on('did-start-loading', () => cancelMeal());
 
   win.on('move', () => {
     if (!win || win.isDestroyed()) return;
@@ -372,6 +375,9 @@ ipcMain.handle('pet:context-menu', (event, opts) => {
         ],
       },
       {
+        label: '天气与换装（选择城市）', click: () => finish('icons:panel'),
+      },
+      {
         label: '图标功能（吃图标/种植）',
         submenu: [
           { label: '打开图标仓库面板（扫描/种子/恢复）', click: () => finish('icons:panel') },
@@ -413,6 +419,8 @@ const DEFAULT_ICON_SETTINGS = {
   scanOnly: true,        // 默认只扫描，不移动真实图标
   dailyLimit: 3,         // 每日上限
   cooldownMs: 90 * 1000, // 冷却
+  rageEnabled: true,
+  lastRageAt: 0,
   neverEat: [],          // 永远不吃的名单（文件名）
   preferences: {},       // { 文件名关键词: 'like' | 'dislike' }
   lastEatAt: 0,
@@ -423,6 +431,8 @@ const DEFAULT_ICON_SETTINGS = {
 let iconSettings = null;
 let iconManifest = [];
 let panelWin = null;
+let weather = null;
+let weatherTimer = null;
 
 function testDesktopOverride() { return process.env.CLAWD_TEST_DESKTOP || null; }
 
@@ -448,6 +458,10 @@ function atomicWriteJson(file, obj) {
 }
 function saveIconSettings() {
   try { atomicWriteJson(settingsFilePath(), iconSettings); } catch (e) { /* ignore */ }
+  notifyIconChange();
+}
+function notifyIconChange() {
+  if (panelWin && !panelWin.isDestroyed() && !panelWin.webContents.isDestroyed()) panelWin.webContents.send('icons:changed');
 }
 function saveIconManifest() {
   try {
@@ -457,6 +471,7 @@ function saveIconManifest() {
       try { fs.copyFileSync(file, path.join(bellyDir(), 'manifest.bak.json')); } catch (e) { /* ignore */ }
     }
     atomicWriteJson(file, iconManifest);
+    notifyIconChange();
     return true;
   } catch (e) { return false; }
 }
@@ -624,7 +639,7 @@ function appetiteScore(entry, hunger) {
 
 function todayKey() { return new Date().toISOString().slice(0, 10); }
 
-function eatBlockReason(entry, hunger, skipAppetite = false) {
+function eatBlockReason(entry, hunger, skipAppetite = false, rageToken = null) {
   if (iconSettings.scanOnly) return 'scanOnly';
   if (!entry || !entry.path) return 'bad-entry';
   const ext = path.extname(entry.path).toLowerCase();
@@ -634,15 +649,17 @@ function eatBlockReason(entry, hunger, skipAppetite = false) {
   if (!dir || path.dirname(path.resolve(entry.path)) !== path.resolve(dir)) return 'not-on-desktop';
   try { if (!fs.lstatSync(entry.path).isFile()) return 'not-shortcut'; } catch { return 'missing'; }
   if (iconSettings.eatenDay !== todayKey()) { iconSettings.eatenDay = todayKey(); iconSettings.eatenToday = 0; saveIconSettings(); }
-  if (iconSettings.eatenToday >= iconSettings.dailyLimit) return 'daily-limit';
-  if (Date.now() - iconSettings.lastEatAt < iconSettings.cooldownMs) return 'cooldown';
+  const rage = rageToken && activeRage && activeRage.token === rageToken;
+  if (rageToken && !rage) return 'cancelled';
+  if (!rage && iconSettings.eatenToday >= iconSettings.dailyLimit) return 'daily-limit';
+  if (!rage && Date.now() - iconSettings.lastEatAt < iconSettings.cooldownMs) return 'cooldown';
   if (!skipAppetite && appetiteScore(entry, hunger) < 35) return 'not-hungry';
   return null;
 }
 
 // 真正“吃掉”：先原子写清单，再移动（EXDEV 时复制+删除源）
-function eatIcon(entry, hunger) {
-  const reason = eatBlockReason(entry, hunger, true);
+function eatIcon(entry, hunger, rageToken = null) {
+  const reason = eatBlockReason(entry, hunger, true, rageToken);
   if (reason) return { ok: false, reason };
   const belly = bellyDir();
   const storedName = uniqueNameIn(belly, entry.name); // 有同名不覆盖
@@ -675,8 +692,11 @@ function eatIcon(entry, hunger) {
       } else { throw e; }
     }
     rec.status = 'stored';
-    iconSettings.lastEatAt = Date.now();
-    iconSettings.eatenToday = (iconSettings.eatenToday || 0) + 1;
+    if (rageToken) iconSettings.lastRageAt = Date.now();
+    else {
+      iconSettings.lastEatAt = Date.now();
+      iconSettings.eatenToday = (iconSettings.eatenToday || 0) + 1;
+    }
     iconSettings.eatenDay = todayKey();
     saveIconManifest();
     saveIconSettings();
@@ -734,9 +754,14 @@ function plantIcon(id) {
   const rec = iconManifest.find((e) => e && e.id === id);
   if (!rec) return { ok: false, reason: 'not-found' };
   if (rec.status !== 'stored') return { ok: false, reason: 'not-stored' };
+  const previous = { ...rec };
   rec.status = 'planting';
   rec.plantedAt = Date.now();
-  saveIconManifest();
+  if (!saveIconManifest()) {
+    delete rec.plantedAt;
+    Object.assign(rec, previous);
+    return { ok: false, reason: 'storage-write-failed' };
+  }
   return { ok: true, record: rec };
 }
 
@@ -757,7 +782,7 @@ function createPanelWindow() {
   if (panelWin && !panelWin.isDestroyed()) { panelWin.show(); panelWin.focus(); return panelWin; }
   panelWin = new BrowserWindow({
     width: 460, height: 620,
-    title: '小猪 Clawd · 图标仓库与种植',
+    title: '小猪 Clawd · 天气与图标仓库',
     backgroundColor: '#1f2430',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -808,33 +833,47 @@ ipcMain.handle('icons:preview', (event, payload) => {
 });
 // 吃图标只有一个事务；面板发请求，宠物走近并播完动画后才能提交。
 let activeMeal = null;
+let activeRage = null;
 const pendingMeals = new Map();
 function fromPet(event) { return win && !win.isDestroyed() && event.sender === win.webContents; }
-function cancelMeal() {
+function cancelMeal(reason = 'cancelled') {
   activeMeal = null;
-  if (win && !win.isDestroyed()) win.webContents.send('icons:pet-command', { type: 'cancel-meal' });
+  if (activeRage) clearTimeout(activeRage.timer);
+  activeRage = null;
+  for (const pending of pendingMeals.values()) {
+    clearTimeout(pending.timer);
+    pending.resolve({ ok: false, reason });
+  }
+  pendingMeals.clear();
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('icons:pet-command', { type: 'cancel-meal' });
 }
 
 ipcMain.handle('icons:prepare', async (event, payload = {}) => {
   if (!fromPet(event)) return { ok: false, reason: 'not-pet' };
   if (activeMeal) return { ok: false, reason: 'busy' };
+  const rage = activeRage;
+  if (payload.rageToken && (!rage || rage.token !== payload.rageToken)) return { ok: false, reason: 'cancelled' };
+  if (rage && payload.rageToken !== rage.token) return { ok: false, reason: 'busy' };
+  if (rage && rage.seen.size >= 5) return { ok: false, reason: 'batch-complete' };
   const meal = { token: randomUUID(), pending: true };
   activeMeal = meal;
   try {
     const scan = await scanDesktop();
     if (activeMeal !== meal) return { ok: false, reason: 'cancelled' };
-    const entries = scan.entries || [];
+    const entries = (scan.entries || []).filter(entry => !rage || (!rage.seen.has(entry.path)
+      && (!rage.real || ['desktop', 'test'].includes(entry.target.source))));
     const entry = payload.path ? entries.find(e => e.path === path.resolve(payload.path)) : entries[Math.floor(Math.random() * entries.length)];
     if (!entry) { activeMeal = null; return { ok: false, reason: 'no-candidates' }; }
-    const real = !!payload.real;
-    const reason = real ? eatBlockReason(entry, payload.hunger, true) : null;
+    const real = rage ? rage.real : !!payload.real;
+    const reason = real ? eatBlockReason(entry, payload.hunger, true, payload.rageToken) : null;
     if (reason) { activeMeal = null; return { ok: false, reason }; }
     if (real && entry.target.source !== 'desktop' && !(testDesktopOverride() && entry.target.source === 'test')) {
       activeMeal = null;
       return { ok: false, reason: 'position-unavailable' };
     }
-    const score = appetiteScore(entry, payload.hunger);
-    Object.assign(meal, { pending: false, entry, real, score, hunger: payload.hunger, expires: Date.now() + 45000 });
+    const score = rage ? 100 : appetiteScore(entry, payload.hunger);
+    if (rage) rage.seen.add(entry.path);
+    Object.assign(meal, { pending: false, entry, real, score, rageToken: payload.rageToken || null, hunger: payload.hunger, expires: Date.now() + 45000 });
     return { ok: true, token: meal.token, entry, real, accepted: score >= 35, score };
   } catch {
     if (activeMeal === meal) activeMeal = null;
@@ -850,22 +889,40 @@ ipcMain.handle('icons:eat', (event, token) => {
   try {
     const st = fs.lstatSync(meal.entry.path);
     if (!st.isFile() || st.mtimeMs !== meal.entry.mtime || st.size !== meal.entry.size) return { ok: false, reason: 'target-changed' };
-    return eatIcon(meal.entry, meal.hunger);
+    return eatIcon(meal.entry, meal.hunger, meal.rageToken);
   } catch { return { ok: false, reason: 'missing' }; }
 });
 ipcMain.handle('icons:release', (event, token) => {
-  if (fromPet(event) && (!token || (activeMeal && token === activeMeal.token))) activeMeal = null;
+  if (fromPet(event) && token && activeMeal && token === activeMeal.token) activeMeal = null;
   return true;
 });
 ipcMain.handle('icons:requestEat', (event, payload = {}) => {
   if (!win || win.isDestroyed()) return { ok: false, reason: 'pet-unavailable' };
-  if (pendingMeals.size || activeMeal) return { ok: false, reason: 'busy' };
+  if (pendingMeals.size || activeMeal || activeRage) return { ok: false, reason: 'busy' };
   const id = randomUUID();
   return new Promise(resolve => {
-    const timer = setTimeout(() => { pendingMeals.delete(id); cancelMeal(); resolve({ ok: false, reason: 'timeout' }); }, 45000);
+    const timer = setTimeout(() => cancelMeal('timeout'), 45000);
     pendingMeals.set(id, { resolve, timer });
     win.webContents.send('icons:pet-command', { type: 'eat', id, path: String(payload.path || ''), real: !!payload.real });
   });
+});
+ipcMain.handle('icons:beginRage', (event) => {
+  if (!fromPet(event)) return { ok: false, reason: 'not-pet' };
+  if (activeRage || activeMeal || pendingMeals.size) return { ok: false, reason: 'busy' };
+  if (!iconSettings.rageEnabled) return { ok: false, reason: 'rage-disabled' };
+  const real = !iconSettings.scanOnly;
+  if (real && Date.now() - iconSettings.lastRageAt < 90000) return { ok: false, reason: 'cooldown' };
+  const token = randomUUID();
+  activeRage = { token, real, seen: new Set(), timer: setTimeout(() => cancelMeal('timeout'), 180000) };
+  return { ok: true, token, real };
+});
+ipcMain.handle('icons:endRage', (event, token) => {
+  if (fromPet(event) && activeRage && token === activeRage.token) {
+    clearTimeout(activeRage.timer);
+    activeRage = null;
+    if (activeMeal && activeMeal.rageToken === token) activeMeal = null;
+  }
+  return true;
 });
 ipcMain.handle('icons:mealResult', (event, id, result) => {
   if (!fromPet(event)) return false;
@@ -873,6 +930,7 @@ ipcMain.handle('icons:mealResult', (event, id, result) => {
   if (!pending) return false;
   clearTimeout(pending.timer);
   pendingMeals.delete(id);
+  if (activeMeal && activeMeal.token === pending.token) activeMeal = null;
   pending.resolve(result);
   return true;
 });
@@ -891,27 +949,58 @@ ipcMain.handle('icons:setRealMode', async (event, enabled) => {
   const result = await dialog.showMessageBox(parent, {
     type: 'question', title: '允许小猪吃快捷方式',
     message: '开启真实移动？',
-    detail: '只移动桌面上的 .lnk / .url 快捷方式到小猪仓库，不删除文件。照片、文档、文件夹和系统图标不会被吃掉。随时可以点“立即恢复全部”。',
+    detail: '只把桌面上的 .lnk / .url 快捷方式移到仓库。怒气功能开启时，揪耳朵攒满怒气会额外依次吃最多 5 个，每轮间隔至少 90 秒。照片、文档、文件夹和系统图标不会被吃掉。可以停止动作或立即恢复全部。',
     buttons: ['取消', '开启'], defaultId: 0, cancelId: 0, noLink: true,
   });
   if (result.response === 1) { iconSettings.scanOnly = false; saveIconSettings(); }
   return iconSettings;
 });
 ipcMain.handle('icons:stored', () => storedList());
-ipcMain.handle('icons:plant', (event, id) => plantIcon(id));
-ipcMain.handle('icons:harvest', (event, id) => restoreIcon(id));
-// 面板点“种下” → 先标记 planting，再让宠物窗口播放第3行种植动画
-ipcMain.handle('icons:plantAnimate', (event, id) => {
-  const r = plantIcon(id);
-  if (r && r.ok && win && !win.isDestroyed()) {
-    try { win.webContents.send('icons:pet-command', { type: 'plant', id }); } catch (e) { /* ignore */ }
-  }
-  return r;
+ipcMain.handle('icons:preparePlant', (event, token) => {
+  const task = activeMeal;
+  if (!fromPet(event) || !task || task.kind !== 'plant' || task.token !== token) return { ok: false, reason: 'invalid-plant' };
+  return { ok: true, token };
 });
+ipcMain.handle('icons:plant', (event, token) => {
+  const task = activeMeal;
+  if (!fromPet(event) || !task || task.kind !== 'plant' || task.token !== token) return { ok: false, reason: 'invalid-plant' };
+  activeMeal = null;
+  if (task.expires < Date.now()) return { ok: false, reason: 'expired' };
+  return plantIcon(task.seedId);
+});
+ipcMain.handle('icons:harvest', (event, id) => {
+  if (activeMeal && activeMeal.kind === 'plant' && activeMeal.seedId === id) cancelMeal();
+  return restoreIcon(id);
+});
+// 种植与吞吃共用占用锁；完整动画结束后才能提交仓库状态。
+ipcMain.handle('icons:plantAnimate', (event, seedId) => {
+  if (!win || win.isDestroyed()) return { ok: false, reason: 'pet-unavailable' };
+  if (pendingMeals.size || activeMeal || activeRage) return { ok: false, reason: 'busy' };
+  const seed = storedList().find(entry => entry.id === seedId);
+  if (!seed || seed.status !== 'stored') return { ok: false, reason: 'not-stored' };
+  const id = randomUUID(), token = randomUUID();
+  activeMeal = { kind: 'plant', token, seedId, expires: Date.now() + 15000 };
+  return new Promise(resolve => {
+    const timer = setTimeout(() => cancelMeal('timeout'), 15000);
+    pendingMeals.set(id, { resolve, timer, token });
+    win.webContents.send('icons:pet-command', { type: 'plant', id, token });
+  });
+});
+ipcMain.handle('icons:cancel', () => { cancelMeal(); return true; });
 ipcMain.handle('icons:restoreAll', () => { cancelMeal(); return restoreAllIcons(); });
 ipcMain.handle('icons:openPanel', () => { createPanelWindow(); return true; });
+ipcMain.handle('weather:state', () => weather.state());
+ipcMain.handle('weather:search', (_event, name) => weather.search(name));
+ipcMain.handle('weather:select', (_event, id) => weather.select(id));
+ipcMain.handle('weather:enabled', (_event, enabled) => weather.setEnabled(enabled));
+ipcMain.handle('weather:refresh', () => weather.refresh());
+ipcMain.handle('weather:source', () => shell.openExternal('https://open-meteo.com/'));
 ipcMain.handle('icons:setSettings', (event, patch) => {
   if (patch && typeof patch === 'object') {
+    if (typeof patch.rageEnabled === 'boolean') {
+      iconSettings.rageEnabled = patch.rageEnabled;
+      if (!patch.rageEnabled && activeRage) cancelMeal();
+    }
     if (typeof patch.scanOnly === 'boolean' && (patch.scanOnly || testDesktopOverride()) && iconSettings.scanOnly !== patch.scanOnly) {
       iconSettings.scanOnly = patch.scanOnly;
       if (patch.scanOnly) cancelMeal(); // 开启只扫描时立即取消正在进行的吃图标
@@ -967,7 +1056,26 @@ app.whenReady().then(() => {
   });
 
   loadIconState(); // 读取设置与清单；异常中断的 moving 条目在此自愈
+  const weatherFile = path.join(app.getPath('userData'), 'weather.json');
+  let initialWeather = {};
+  try { initialWeather = JSON.parse(fs.readFileSync(weatherFile, 'utf8')); } catch { /* 首次使用 */ }
+  weather = new WeatherService({
+    initial: initialWeather && typeof initialWeather === 'object' ? initialWeather : {},
+    fetchJson: async url => {
+      const response = await net.fetch(url, { signal: AbortSignal.timeout(10000), redirect: 'error' });
+      if (!response.ok) throw new Error('weather-http');
+      return response.json();
+    },
+    save: value => atomicWriteJson(weatherFile, value),
+    changed: state => {
+      for (const target of [win, panelWin]) {
+        if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send('weather:changed', state);
+      }
+    },
+  });
   createWindow();
+  weather.refresh();
+  weatherTimer = setInterval(() => weather.refresh(), WEATHER_INTERVAL);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -976,6 +1084,7 @@ app.whenReady().then(() => {
 
 // 退出前再落盘一次清单（未完成的 moving 会在下次启动自愈；也可随时“立即恢复全部”）
 app.on('before-quit', () => {
+  clearInterval(weatherTimer);
   try { reconcileManifest(); saveIconManifest(); saveIconSettings(); } catch (e) { /* ignore */ }
 });
 

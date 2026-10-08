@@ -58,3 +58,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 #status { min-height: 2.8em; color: var(--accent); }
 .item { flex-wrap: wrap; }
 .item .nm { min-width: 125px; }
+[hidden] { display: none !important; }
+input[type="search"], select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px; min-width: 0; flex: 1; }
+.row button { flex-shrink: 0; }
+#weatherStatus { color: var(--accent); }

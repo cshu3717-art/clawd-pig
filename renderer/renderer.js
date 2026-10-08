@@ -92,6 +92,12 @@
   let sprSeqToken = 0;
   let iconFlow = null;
   let iconAnimationDone = null;
+  let rageFlow = null;
+  let anger = 0;
+  let ragePending = false;
+  let lastAngerChange = Date.now();
+  let lastRageResult = null;
+  let weatherState = null;
 
   function cancelSprSeq() {
     if (sprSeq) { clearTimeout(sprSeq.timer); sprSeq = null; }
@@ -132,7 +138,7 @@
   }
 
   function sprSetExpr(key, ms) {
-    if (!spritesReady || !EXPR_IDX[key]) return;
+    if (!spritesReady || EXPR_IDX[key] === undefined) return;
     if (currentAction && SPR_ACTION_MAP[currentAction.id]) return; // 动作行优先
     if (dKind === 'icon' && dIconLoopsLeft > 0) return;            // 吃/种植仪式优先，不被情绪打断
     dKind = 'expr';
@@ -447,6 +453,7 @@
       flower: s.flower && FLOWER_STAGES.includes(s.flower.stage)
         ? { stage: s.flower.stage, water: Math.max(0, Math.floor(s.flower.water) || 0) } : null,
       mood: { happiness: clamp100(m.happiness), energy: clamp100(m.energy), affection: clamp100(m.affection) },
+      anger: Number.isFinite(s.anger) ? Math.max(0, Math.min(99, s.anger)) : 0,
     };
   }
   let saved = sanitizeSaved(null);
@@ -460,6 +467,7 @@
     }
     saved.flower = flower ? { stage: flower.stage, water: flower.water } : null;
     saved.mood = { happiness: moodVal.happiness, energy: moodVal.energy, affection: moodVal.affection };
+    saved.anger = anger;
     try { localStorage.setItem(STORE_KEY, JSON.stringify(saved)); } catch (e) { /* 忽略 */ }
   }
 
@@ -987,6 +995,7 @@
   function angryNow() { return moodName === 'angry' && moodUntil > Date.now(); }
 
   function recomputeMoodAuto() {
+    if ((iconFlow && iconFlow.busy) || (rageFlow && rageFlow.busy) || dKind === 'icon') return;
     const nowT = Date.now();
     if (moodUntil > nowT) return;
     if (nowT - lastAutoMoodAt < 25000) return;
@@ -1015,6 +1024,7 @@
   }
 
   function deliverPendingMood() {
+    if ((iconFlow && iconFlow.busy) || (rageFlow && rageFlow.busy) || dKind === 'icon') return;
     if (pendingMoodText && !currentAction && !activeSpeech && !queue.length) {
       const t = pendingMoodText;
       pendingMoodText = null;
@@ -1179,6 +1189,16 @@
     ctx.scale(pose.sx || 1, pose.sy || 1);
     ctx.translate(0, pose.ty || 0);
     ctx.drawImage(src, f.x, f.y, f.w, f.h, -imgW / 2, -imgH, imgW, imgH);
+
+    // 专用吃/种植帧与大场景道具有各自构图；回到待机或走动后恢复配饰。
+    if (weatherState && weatherState.weather && (dKind === 'core' || dKind === 'expr')) {
+      const rc = dKind === 'expr' ? exprFrameRC(dExprKey) : { row: SPR_ROW[dCoreRow], col: dCol };
+      const box = contentOfCell(dKind === 'expr' ? 'expr' : 'core', rc.row, rc.col);
+      if (box) window.ClawdWeatherOutfit.draw(ctx, weatherState.weather.outfit, {
+        x: -imgW / 2 + box.x * imgW / f.w, y: -imgH + box.y * imgH / f.h,
+        w: box.w * imgW / f.w, h: box.h * imgH / f.h,
+      });
+    }
 
     // 运行时把“真实快捷方式图标”覆盖到蓝色占位符位置（探测失败则保留占位符，不破坏动画）
     if (dKind === 'icon' && overlayIconImg) {
@@ -1476,6 +1496,7 @@
     drawMoodFx();
     drawScene();
     drawPersistentFlower();
+    drawAngerMeter();
     if (debugOn) drawDebugOverlay();
     updateDebug();
   }
@@ -1524,6 +1545,7 @@
     reactionTimer = setTimeout(() => {
       reactionUntil = 0;
       if (spritesReady) sprBase();
+      maybeStartRage();
       if (walking && !autoBlocked()) enterIdle(); // 结束后 idle，等待3~8秒再决定
     }, 1700);
 
@@ -1547,6 +1569,7 @@
   }
 
   function hardReactionMood(partId) {
+    changeAnger(partId === 'ear' ? 25 : partId === 'belly' ? -15 : -8);
     if (partId === 'belly') { addMood('happiness', 2); maybeHop(); }
     else if (partId === 'nose') { addMood('affection', 1); addMood('happiness', 1); if (Math.random() < 0.4) setMood('shy', 6000); }
     else if (partId === 'ear') {
@@ -1562,6 +1585,43 @@
         speak('哼！再揪耳朵就生气啦！', 2000);
       }
     }
+  }
+
+  function changeAnger(delta) {
+    anger = Math.max(0, Math.min(100, anger + delta));
+    lastAngerChange = Date.now();
+    ragePending = anger >= 100;
+  }
+
+  // 和小猪共用画布、尺寸及窗口锚点，温度计不会成为单独漂移的窗口。
+  function drawAngerMeter() {
+    if (!spritesReady) return;
+    const k = pigR.w / 96;
+    const x = pigR.x + pigR.w - 8 * k;
+    const y = pigR.y + pigR.h * 0.35;
+    const h = 30 * k, w = 6 * k;
+    r(x - k, y - k, w + 2 * k, h + 4 * k, '#8a5654');
+    r(x, y, w, h + 2 * k, '#fff0e9');
+    const fill = Math.max(2 * k, h * anger / 100);
+    r(x + k, y + h - fill, w - 2 * k, fill, anger >= 75 ? '#e95858' : '#eea15f');
+    r(x - k, y + h, w + 2 * k, 5 * k, anger >= 75 ? '#e95858' : '#eea15f');
+  }
+
+  async function maybeStartRage() {
+    if (!ragePending || !rageFlow || rageFlow.busy || iconFlow.busy || !canStartIconRitual()) return;
+    ragePending = false;
+    lastRageResult = null;
+    const result = await rageFlow.run();
+    lastRageResult = result;
+    anger = 0;
+    persistNow();
+    const count = result.count || 0;
+    if (result.reason === 'cancelled') speak('停下来啦，摸摸肚子就消气', 1800);
+    else if (result.reason === 'rage-disabled') speak('哼，已经关闭生气吃图标啦', 1800);
+    else if (result.reason === 'cooldown') speak('先消消气，过一会儿再说', 1800);
+    else if (count) speak(result.preview ? `消气演习结束，追了 ${count} 个图标～` : `吃了 ${count} 个，仓库里都能找回来`, 2300);
+    else speak('没找到现在能追的图标，先消气啦', 2000);
+    if (walking && !autoBlocked()) enterIdle();
   }
 
   function maybeHop() { happyHopUntil = Date.now() + 450; }
@@ -1671,12 +1731,13 @@
   function clearIdleTimer() { if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; } }
   function cancelWindowMotion() { if (pet && pet.cancelMove) pet.cancelMove(); }
   function autoBlocked() {
-    return mode === 'none' || (iconFlow && iconFlow.busy) || dKind === 'icon' || dragging || reactionBusy() || !!currentAction || (!!sprSeq && !!sprSeq.timer);
+    return mode === 'none' || ragePending || (rageFlow && rageFlow.busy) || (iconFlow && iconFlow.busy) || dKind === 'icon' || dragging || reactionBusy() || !!currentAction || (!!sprSeq && !!sprSeq.timer);
   }
 
   // 立即停止任何移动与待机计时（进入任意非 walking 状态时调用）
   function pauseAutoForUser(keepMeal = false) {
     if (!keepMeal && iconFlow) iconFlow.cancel();
+    if (!keepMeal) { ragePending = false; if (rageFlow) rageFlow.cancel(); }
     clearIdleTimer();
     cancelWindowMotion();
     if (mvState === 'moving' || mvState === 'icon-moving') {
@@ -1962,7 +2023,7 @@
   let lastAutoActionAt = Date.now();
   function maybeAutoAction() {
     const nowT = Date.now();
-    if (currentAction || actionReaction || walking || dragging || (iconFlow && iconFlow.busy) || dKind === 'icon') return;
+    if (currentAction || actionReaction || walking || dragging || ragePending || (rageFlow && rageFlow.busy) || (iconFlow && iconFlow.busy) || dKind === 'icon') return;
     if (nowT - lastInteractMs < 12000) return;
     if (nowT - lastAutoActionAt < 25000) return;
     lastAutoActionAt = nowT;
@@ -1998,6 +2059,8 @@
     }
     recomputeMoodAuto();
     deliverPendingMood();
+    if (!ragePending && !(rageFlow && rageFlow.busy) && nowT - lastAngerChange > 5000) anger = Math.max(0, anger - 2);
+    maybeStartRage();
     maybeAutoAction();
     persistNow();
   }
@@ -2166,6 +2229,11 @@
     loadSaved();
     sizePreset = saved.size;
     moodVal = { happiness: saved.mood.happiness, energy: saved.mood.energy, affection: saved.mood.affection };
+    anger = saved.anger;
+    if (window.weatherAPI) {
+      window.weatherAPI.onChange(state => { weatherState = state; });
+      weatherState = await window.weatherAPI.state();
+    }
     flower = saved.flower ? { stage: saved.flower.stage, water: saved.flower.water } : null;
 
     computeLayout();
@@ -2189,12 +2257,16 @@
     if (window.iconAPI && window.iconAPI.onCommand) {
       window.iconAPI.onCommand(async (cmd) => {
         if (!cmd) return;
-        if (cmd.type === 'cancel-meal') { iconFlow.cancel(); return; }
+        if (cmd.type === 'cancel-meal') { ragePending = false; rageFlow.cancel(); iconFlow.cancel(); return; }
         if (cmd.type === 'eat') {
           const result = await iconRitualOnce(cmd.real, cmd.path);
           await window.iconAPI.mealResult(cmd.id, result);
         } else if (cmd.type === 'plant') {
-          if (playIconGroup(2, { loops: 1 })) speak('种下啦～长好后点“收获”恢复', 2200);
+          const ready = sprIconReady && canStartIconRitual();
+          const result = ready ? await iconFlow.run({ kind: 'plant', token: cmd.token })
+            : { ok: false, reason: sprIconReady ? 'busy' : 'animation-unavailable' };
+          if (result.ok) speak('种好啦，点“收获”就能放回桌面', 2200);
+          await window.iconAPI.mealResult(cmd.id, result);
         } else if (cmd.type === 'preview') {
           let img = null;
           try {
@@ -2209,7 +2281,8 @@
       });
     }
 
-    if (spritesReady) speak('嗨，我是 Clawd！新素材已就位', 2000);
+    if (spritesReady && weatherState && !weatherState.city) speak('右键打开面板，选座城市给我搭衣服吧', 2800);
+    else if (spritesReady) speak('嗨，我是 Clawd！', 2000);
     else if (mode === 'static') speak('精灵图缺失 · 参考图模式', 2200);
     else speak('嗨，我是 Clawd！', 2000);
     persistNow();
@@ -2279,8 +2352,10 @@
   }
 
   iconFlow = new window.ClawdIconFlow({
-    pause: async () => { pauseAutoForUser(true); clearSpeech(); await pet.cancelMove(); },
+    pause: async () => { touch(); pauseAutoForUser(true); clearSpeech(); await pet.cancelMove(); },
     prepare: options => window.iconAPI.prepare({ ...options, hunger: hungerNow() }),
+    preparePlant: token => window.iconAPI.preparePlant(token),
+    commitPlant: token => window.iconAPI.plant(token),
     loadIcon: async path => { try { const url = await window.iconAPI.iconOf(path); return url ? await loadImage(url) : null; } catch { return null; } },
     walk: walkToDesktopIcon,
     animate: animateMeal,
@@ -2288,9 +2363,16 @@
     release: token => window.iconAPI.release(token),
     resume: () => { if (walking && !autoBlocked()) enterIdle(); },
   });
+  rageFlow = new window.ClawdRageFlow({
+    begin: () => window.iconAPI.beginRage(),
+    step: options => iconFlow.run(options),
+    cancelStep: () => iconFlow.cancel(),
+    end: token => window.iconAPI.endRage(token),
+    progress: (count, preview) => speak(`${preview ? '（预览）' : ''}啊呜，第 ${count} 个！`, 900),
+  });
   async function iconRitualOnce(real, path) {
     if (!window.iconAPI || !sprIconReady) return { ok: false, reason: 'animation-unavailable' };
-    if (currentAction || dragging || reactionBusy() || (sprSeq && sprSeq.timer)) return { ok: false, reason: 'busy' };
+    if (ragePending || rageFlow.busy || currentAction || dragging || reactionBusy() || (sprSeq && sprSeq.timer)) return { ok: false, reason: 'busy' };
     const result = await iconFlow.run({ real: !!real, path });
     if (result.ok) speak(result.preview ? '（预览）啊呜～' : '吃掉啦，随时能种回来！', 1800);
     else if (result.reason === 'not-hungry') speak('唔…这个不太想吃', 1600);
@@ -2300,7 +2382,7 @@
     preview: row => playIconGroup(Number(row) || 0, { loops: 1 }),
     eatOnce: (real, path) => iconRitualOnce(!!real, path),
     simulate: path => iconRitualOnce(false, path),
-    cancel: () => iconFlow.cancel(),
+    cancel: () => { ragePending = false; rageFlow.cancel(); iconFlow.cancel(); },
     state: () => window.iconAPI ? window.iconAPI.state() : null,
   };
 
@@ -2317,6 +2399,8 @@
       flower: flower ? { ...flower } : null,
       walking, mvState,
       mealBusy: iconFlow.busy,
+      anger, rageBusy: rageFlow.busy, ragePending, lastRageResult,
+      weather: weatherState,
       frameCol: dCol,
       movesDone,
       moveHistory: moveHistory.map((m) => ({ x: m.x, y: m.y })),

@@ -9,6 +9,20 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+contextBridge.exposeInMainWorld('weatherAPI', {
+  state: () => ipcRenderer.invoke('weather:state'),
+  search: name => ipcRenderer.invoke('weather:search', String(name || '')),
+  select: id => ipcRenderer.invoke('weather:select', id),
+  setEnabled: enabled => ipcRenderer.invoke('weather:enabled', !!enabled),
+  refresh: () => ipcRenderer.invoke('weather:refresh'),
+  source: () => ipcRenderer.invoke('weather:source'),
+  onChange: cb => {
+    const listener = (_event, state) => cb(state);
+    ipcRenderer.on('weather:changed', listener);
+    return () => ipcRenderer.removeListener('weather:changed', listener);
+  },
+});
+
 function clampNum(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
@@ -70,6 +84,11 @@ contextBridge.exposeInMainWorld('petAPI', {
 
 // —— 图标仓库 / 挑食 / 种植（白名单接口：渲染进程只能调用这些）
 contextBridge.exposeInMainWorld('iconAPI', {
+  onChanged: cb => {
+    const listener = () => cb();
+    ipcRenderer.on('icons:changed', listener);
+    return () => ipcRenderer.removeListener('icons:changed', listener);
+  },
   state: () => ipcRenderer.invoke('icons:state'),
   scan: () => ipcRenderer.invoke('icons:scan'),
   iconOf: (filePath) => ipcRenderer.invoke('icons:iconOf', String(filePath || '')),
@@ -85,6 +104,10 @@ contextBridge.exposeInMainWorld('iconAPI', {
   setRealMode: (enabled) => ipcRenderer.invoke('icons:setRealMode', !!enabled),
   stored: () => ipcRenderer.invoke('icons:stored'),
   plant: (id) => ipcRenderer.invoke('icons:plant', String(id || '')),
+  preparePlant: (token) => ipcRenderer.invoke('icons:preparePlant', token),
+  cancel: () => ipcRenderer.invoke('icons:cancel'),
+  beginRage: () => ipcRenderer.invoke('icons:beginRage'),
+  endRage: token => ipcRenderer.invoke('icons:endRage', token),
   harvest: (id) => ipcRenderer.invoke('icons:harvest', String(id || '')),
   restoreAll: () => ipcRenderer.invoke('icons:restoreAll'),
   openPanel: () => ipcRenderer.invoke('icons:openPanel'),
