@@ -7,6 +7,7 @@ const tmp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'clawd-assets-
 process.env.CLAWD_TEST_USERDATA = tmp;
 process.env.CLAWD_TEST_DESKTOP = path.join(tmp, 'desktop');
 fs.mkdirSync(process.env.CLAWD_TEST_DESKTOP);
+fs.writeFileSync(path.join(tmp, 'onboarding.json'), JSON.stringify({ version: 1, status: 'done', step: 2 }));
 let failed = false;
 app.on('web-contents-created', (_e, c) => {
   c.on('did-fail-load', (_ev, code, desc, url) => { failed = true; console.log(`[did-fail-load] ${code} ${desc} ${url}`); });

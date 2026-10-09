@@ -62,3 +62,27 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 input[type="search"], select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px; min-width: 0; flex: 1; }
 .row button { flex-shrink: 0; }
 #weatherStatus { color: var(--accent); }
+.setup-link { margin: 0 0 12px; }
+.setup-top, .setup-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.setup-top { margin-bottom: 16px; }
+.eyebrow { color: #ebbdac; font-size: 12px; margin: 0 0 5px; }
+.setup-hero { display: flex; align-items: center; gap: 14px; min-height: 115px; }
+.setup-hero h1 { font-size: 21px; margin: 0; }
+.setup-hero .note { margin: 5px 0 0; }
+#setupPortrait { width: 88px; height: 88px; flex-shrink: 0; image-rendering: pixelated; background: #39313a; border-radius: 20px; }
+.setup-steps { list-style: none; display: flex; gap: 8px; padding: 0; margin: 14px 0 20px; }
+.setup-steps li { flex: 1; border-top: 3px solid var(--line); padding-top: 6px; color: var(--dim); font-size: 12px; }
+.setup-steps li[aria-current="step"] { border-color: #eeab8c; color: #ffd7c5; }
+.setup-tips { padding-left: 18px; line-height: 1.9; color: var(--dim); }
+#setupStatus { min-height: 1.6em; color: #ffd479; }
+.quiet { background: transparent; }
+.primary { background: #e4ab92; border-color: #e4ab92; color: #282131; font-weight: 600; margin-left: auto; }
+.primary:hover { background: #f8c6ac; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #f8c6ac; outline-offset: 3px; }
+body.in-setup .settings-only { display: none; }
+body.in-setup { padding: 18px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+body.in-setup #setupIntro, body.in-setup #setupFooter { flex: 0 0 auto; }
+body.in-setup .card { padding: 14px; overflow-y: auto; min-height: 0; flex: 1 1 auto; }
+body.in-setup #setupStatus { margin: 2px 0 8px; }
+body.in-setup #setupTitle:focus { outline: none; }
+@media (max-width: 380px) { .setup-controls { flex-wrap: wrap; } .setup-hero { gap: 8px; } .setup-hero h1 { font-size: 18px; } }

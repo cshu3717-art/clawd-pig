@@ -9,6 +9,22 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+contextBridge.exposeInMainWorld('setupAPI', {
+  state: () => ipcRenderer.invoke('setup:state'),
+  progress: step => ipcRenderer.invoke('setup:progress', step),
+  finish: () => ipcRenderer.invoke('setup:finish'),
+  later: () => ipcRenderer.invoke('setup:later'),
+  open: () => ipcRenderer.invoke('setup:open'),
+  close: () => ipcRenderer.invoke('setup:close'),
+  portrait: () => ipcRenderer.invoke('setup:portrait'),
+  preview: action => ipcRenderer.invoke('setup:preview', action),
+  onOpen: cb => {
+    const listener = () => cb();
+    ipcRenderer.on('setup:open', listener);
+    return () => ipcRenderer.removeListener('setup:open', listener);
+  },
+});
+
 contextBridge.exposeInMainWorld('weatherAPI', {
   state: () => ipcRenderer.invoke('weather:state'),
   search: name => ipcRenderer.invoke('weather:search', String(name || '')),

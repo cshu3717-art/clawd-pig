@@ -1,7 +1,7 @@
 {
   "name": "clawd-pig-desktop-pet",
   "productName": "小猪桌宠",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "小猪桌宠：透明无边框置顶桌面宠物，可拖动、自主移动、点击反应、动作/表情、吃图标与种植恢复。",
   "main": "main.js",
   "private": true,
@@ -15,6 +15,7 @@
     "test": "node --test test/*.test.js",
     "check": "node --check main.js && node --check preload.js && node --check renderer/renderer.js && node --check renderer/panel.js && node scripts/verify-package.js",
     "test:smoke": "electron smoke-icons.js",
+    "test:setup": "electron smoke-onboarding.js",
     "test:assets": "electron smoke-pack.js"
   },
   "devDependencies": {

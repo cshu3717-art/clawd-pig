@@ -17,6 +17,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { locate } = require('./lib/desktop-targets');
 const { WeatherService, INTERVAL: WEATHER_INTERVAL } = require('./lib/weather');
+const { Onboarding } = require('./lib/onboarding');
 
 const ASSET_DIR = __dirname; // 素材与代码同目录（当前工作区）
 const SPRITE_DIR = path.join(__dirname, 'assets');
@@ -316,6 +317,10 @@ ipcMain.handle('pet:set-bounds', (event, b) => {
 ipcMain.handle('pet:show', (event) => {
   const w = winOf(event);
   if (w && !w.isVisible()) w.show();
+  if (w === win && onboarding && onboarding.shouldOpen() && !setupOffered) {
+    setupOffered = true;
+    createPanelWindow(true);
+  }
   return true;
 });
 
@@ -377,6 +382,7 @@ ipcMain.handle('pet:context-menu', (event, opts) => {
       {
         label: '天气与换装（选择城市）', click: () => finish('icons:panel'),
       },
+      { label: '重新看看新手引导', click: () => finish('setup:open') },
       {
         label: '图标功能（吃图标/种植）',
         submenu: [
@@ -433,6 +439,8 @@ let iconManifest = [];
 let panelWin = null;
 let weather = null;
 let weatherTimer = null;
+let onboarding = null;
+let setupOffered = false;
 
 function testDesktopOverride() { return process.env.CLAWD_TEST_DESKTOP || null; }
 
@@ -778,10 +786,19 @@ function storedList() {
     }));
 }
 
-function createPanelWindow() {
-  if (panelWin && !panelWin.isDestroyed()) { panelWin.show(); panelWin.focus(); return panelWin; }
+function createPanelWindow(setup = false) {
+  if (panelWin && !panelWin.isDestroyed()) {
+    panelWin.show(); panelWin.focus();
+    if (setup) {
+      const target = panelWin.webContents;
+      const openSetup = () => { if (!target.isDestroyed()) target.send('setup:open'); };
+      if (target.isLoading()) target.once('did-finish-load', openSetup); else openSetup();
+    }
+    return panelWin;
+  }
   panelWin = new BrowserWindow({
     width: 460, height: 620,
+    minWidth: 360, minHeight: 480,
     title: '小猪 Clawd · 天气与图标仓库',
     backgroundColor: '#1f2430',
     webPreferences: {
@@ -795,8 +812,11 @@ function createPanelWindow() {
   panelWin.setMenu(null);
   panelWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   panelWin.webContents.on('will-navigate', (e) => e.preventDefault());
-  panelWin.on('closed', () => { panelWin = null; });
-  panelWin.loadURL('app://pet/panel.html');
+  panelWin.on('closed', () => {
+    panelWin = null;
+    if (onboarding && onboarding.shouldOpen()) onboarding.later();
+  });
+  panelWin.loadURL('app://pet/panel.html' + (setup ? '#setup' : ''));
   return panelWin;
 }
 
@@ -995,6 +1015,34 @@ ipcMain.handle('weather:select', (_event, id) => weather.select(id));
 ipcMain.handle('weather:enabled', (_event, enabled) => weather.setEnabled(enabled));
 ipcMain.handle('weather:refresh', () => weather.refresh());
 ipcMain.handle('weather:source', () => shell.openExternal('https://open-meteo.com/'));
+ipcMain.handle('setup:state', () => onboarding.state());
+ipcMain.handle('setup:progress', (_event, step) => onboarding.progress(step));
+ipcMain.handle('setup:finish', () => onboarding.finish());
+ipcMain.handle('setup:later', () => onboarding.later());
+ipcMain.handle('setup:open', () => { createPanelWindow(true); return true; });
+ipcMain.handle('setup:portrait', () => {
+  const core = readAsset('clawd-pig-core-v1.png');
+  return core ? `data:image/png;base64,${core.toString('base64')}` : null;
+});
+ipcMain.handle('setup:close', event => {
+  if (!panelWin || event.sender !== panelWin.webContents) return false;
+  const target = panelWin;
+  setTimeout(() => { if (!target.isDestroyed()) target.close(); }, 50);
+  return true;
+});
+ipcMain.handle('setup:preview', (_event, action) => {
+  if (!['belly', 'wave'].includes(action)) return { ok: false, reason: 'bad-action' };
+  if (!win || win.isDestroyed() || !win.webContents.getURL().endsWith('/index.html')) return { ok: false, reason: 'pet-unavailable' };
+  if (pendingMeals.size || activeMeal || activeRage) return { ok: false, reason: 'busy' };
+  const id = randomUUID();
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingMeals.delete(id); resolve({ ok: false, reason: 'timeout' });
+    }, 5000);
+    pendingMeals.set(id, { resolve, timer });
+    win.webContents.send('icons:pet-command', { type: 'setup-preview', id, action });
+  });
+});
 ipcMain.handle('icons:setSettings', (event, patch) => {
   if (patch && typeof patch === 'object') {
     if (typeof patch.rageEnabled === 'boolean') {
@@ -1056,6 +1104,10 @@ app.whenReady().then(() => {
   });
 
   loadIconState(); // 读取设置与清单；异常中断的 moving 条目在此自愈
+  const setupFile = path.join(app.getPath('userData'), 'onboarding.json');
+  let initialSetup;
+  try { initialSetup = JSON.parse(fs.readFileSync(setupFile, 'utf8')); } catch { /* 首次使用 */ }
+  onboarding = new Onboarding({ initial: initialSetup, save: value => atomicWriteJson(setupFile, value) });
   const weatherFile = path.join(app.getPath('userData'), 'weather.json');
   let initialWeather = {};
   try { initialWeather = JSON.parse(fs.readFileSync(weatherFile, 'utf8')); } catch { /* 首次使用 */ }

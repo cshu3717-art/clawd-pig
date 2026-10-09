@@ -98,6 +98,7 @@
   let lastAngerChange = Date.now();
   let lastRageResult = null;
   let weatherState = null;
+  let weatherFrame = null;
 
   function cancelSprSeq() {
     if (sprSeq) { clearTimeout(sprSeq.timer); sprSeq = null; }
@@ -1190,14 +1191,16 @@
     ctx.translate(0, pose.ty || 0);
     ctx.drawImage(src, f.x, f.y, f.w, f.h, -imgW / 2, -imgH, imgW, imgH);
 
-    // 专用吃/种植帧与大场景道具有各自构图；回到待机或走动后恢复配饰。
-    if (weatherState && weatherState.weather && (dKind === 'core' || dKind === 'expr')) {
-      const rc = dKind === 'expr' ? exprFrameRC(dExprKey) : { row: SPR_ROW[dCoreRow], col: dCol };
-      const box = contentOfCell(dKind === 'expr' ? 'expr' : 'core', rc.row, rc.col);
-      if (box) window.ClawdWeatherOutfit.draw(ctx, weatherState.weather.outfit, {
-        x: -imgW / 2 + box.x * imgW / f.w, y: -imgH + box.y * imgH / f.h,
-        w: box.w * imgW / f.w, h: box.h * imgH / f.h,
-      });
+    weatherFrame = null;
+    if (weatherState?.weather) {
+      const row = Math.round(f.y / f.h), col = Math.round(f.x / f.w);
+      const fallback = dKind === 'core' || dKind === 'expr' ? contentOfCell(dKind, row, col) : null;
+      const layer = window.ClawdWeatherOutfit.layer(src, f, weatherState.weather.outfit, dKind, row, col, fallback);
+      if (layer) {
+        const px = layer.pad * imgW / f.w, py = layer.pad * imgH / f.h;
+        ctx.drawImage(layer.canvas, -imgW / 2 - px, -imgH - py, imgW + px * 2, imgH + py * 2);
+        weatherFrame = { kind: dKind, row, col, angle: layer.box.angle, outfit: weatherState.weather.outfit };
+      }
     }
 
     // 运行时把“真实快捷方式图标”覆盖到蓝色占位符位置（探测失败则保留占位符，不破坏动画）
@@ -1948,6 +1951,8 @@
       runSpriteTest(cmd.slice('sprite:'.length));
     } else if (cmd === 'icons:panel') {
       if (window.iconAPI) window.iconAPI.openPanel();
+    } else if (cmd === 'setup:open') {
+      if (window.setupAPI) window.setupAPI.open();
     } else if (cmd.startsWith('icons:preview:')) {
       const row = parseInt(cmd.slice('icons:preview:'.length), 10) || 0;
       const label = row === 0 ? '发现→观察→吞吃→咀嚼→满足' : row === 1 ? '闻一闻→犹豫→摇头→嫌弃' : '拿种子→挖土→播种→浇水→发芽→恢复';
@@ -2125,6 +2130,7 @@
         sprActionsCanvas.height = aImg.naturalHeight;
         sprCoreCanvas.getContext('2d', { alpha: true }).drawImage(cImg, 0, 0);
         sprActionsCanvas.getContext('2d', { alpha: true }).drawImage(aImg, 0, 0);
+        sprActionsCanvas = window.ClawdSpriteAtlas.prepare(sprActionsCanvas, 'action');
         sprFrameW = Math.round(cImg.naturalWidth / 4);
         sprFrameH = Math.round(cImg.naturalHeight / 4);
         const aW = Math.round(aImg.naturalWidth / 4);
@@ -2190,7 +2196,7 @@
         cv.height = ii.naturalHeight;
         cv.getContext('2d', { alpha: true }).drawImage(ii, 0, 0);
         if (ii.naturalWidth % ICON_COLS === 0 && ii.naturalHeight % ICON_ROWS === 0 && ii.naturalWidth > 0) {
-          sprIconCanvas = cv;
+          sprIconCanvas = window.ClawdSpriteAtlas.prepare(cv, 'icon');
           sprIconReady = true;
         }
       } catch (e) {
@@ -2258,6 +2264,13 @@
       window.iconAPI.onCommand(async (cmd) => {
         if (!cmd) return;
         if (cmd.type === 'cancel-meal') { ragePending = false; rageFlow.cancel(); iconFlow.cancel(); return; }
+        if (cmd.type === 'setup-preview') {
+          const ready = canStartIconRitual() && !iconFlow.busy && !rageFlow.busy && !ragePending;
+          if (ready && cmd.action === 'belly') triggerReaction('belly');
+          else if (ready && cmd.action === 'wave') { touch(); pauseAutoForUser(); sprSetCore('happy_wave'); speak('认识你啦，以后一起玩～', 1800); }
+          await window.iconAPI.mealResult(cmd.id, { ok: !!ready, reason: ready ? null : 'busy' });
+          return;
+        }
         if (cmd.type === 'eat') {
           const result = await iconRitualOnce(cmd.real, cmd.path);
           await window.iconAPI.mealResult(cmd.id, result);
@@ -2401,6 +2414,7 @@
       mealBusy: iconFlow.busy,
       anger, rageBusy: rageFlow.busy, ragePending, lastRageResult,
       weather: weatherState,
+      weatherFrame,
       frameCol: dCol,
       movesDone,
       moveHistory: moveHistory.map((m) => ({ x: m.x, y: m.y })),

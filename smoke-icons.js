@@ -9,6 +9,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'clawd-smoke-'));
 const desk = path.join(temp, 'desktop');
 const user = path.join(temp, 'profile');
 fs.mkdirSync(desk); fs.mkdirSync(user);
+fs.writeFileSync(path.join(user, 'onboarding.json'), JSON.stringify({ version: 1, status: 'done', step: 2 }));
 process.env.CLAWD_TEST_DESKTOP = desk;
 process.env.CLAWD_TEST_USERDATA = user;
 for (const name of ['学习软件.lnk', 'B工具.url', 'Chat.lnk', '小猪Clawd.lnk', '照片.jpg', '文档.docx']) fs.writeFileSync(path.join(desk, name), 'fixture:' + name);
@@ -93,6 +94,10 @@ async function run() {
   await ev("window.__clawd.runReaction('nose')");
   check('触摸鼻子的表情反应仍可用', (await state()).spriteView === 'expr:surprised');
   await wait(1900);
+  check('引导可让桌面小猪回应摸肚子', (await ev("window.setupAPI.preview('belly')")).ok && (await state()).spriteView.startsWith('expr:'));
+  check('引导互动占用时不谎报成功', (await ev("window.setupAPI.preview('wave')")).reason === 'busy');
+  check('引导拒绝未允许的动作', (await ev("window.setupAPI.preview('eat')")).reason === 'bad-action');
+  await wait(2400);
   await ev("window.iconAPI.setSettings({preferences:{'.lnk':'like','.url':'like'}, cooldownMs:0, dailyLimit:10})");
   const a = path.join(desk, '学习软件.lnk');
   pet.setPosition(600, 400);
@@ -233,6 +238,33 @@ async function run() {
   check('重新开启后按雪天换装并保存城市', JSON.parse(fs.readFileSync(path.join(user, 'weather.json'), 'utf8')).city.name === '太原');
   await wait(100);
   fs.writeFileSync('test-results/pig-snow.png', (await pet.webContents.capturePage()).toPNG());
+  const gallery = await ev(`(${require('./test-support/outfit-gallery').toString()})()`);
+  check('七种天气配饰覆盖全部 40 个专用动作格并贴着身体', gallery.frameOutfits === 280 && gallery.bodyContact);
+  check('围巾不盖住手机与花洒，原图像素未改写', gallery.protectedPixels > 100 && gallery.coveredProps === 0 && gallery.originalUntouched);
+  check('动画脚尖保留完整，下一排不再带出上一排的道具', gallery.atlasClean);
+  for (const [kind, data] of Object.entries(gallery.pngs)) fs.writeFileSync(`test-results/outfits-${kind}.png`, Buffer.from(data.split(',')[1], 'base64'));
+  for (const [item, row] of [['plant',0],['water',1],['paint',2],['phone',3]]) {
+    await ev(`window.__clawd.runSpriteTest(${q(item)})`);
+    const seenFrames = new Set();
+    await until(async () => {
+      const s = await state();
+      if (s.weatherFrame?.kind === 'action' && s.weatherFrame.row === row) seenFrames.add(s.weatherFrame.col);
+      return seenFrames.size === 4;
+    });
+    check(`${item} 的四帧动画持续穿着天气配饰`, seenFrames.size === 4);
+  }
+  await until(async () => (await state()).spriteView.startsWith('core:'));
+  for (const row of [0,1,2]) {
+    await ev(`window.__clawdIcons.preview(${row})`);
+    const seenFrames = new Set();
+    await until(async () => {
+      const s = await state();
+      if (s.weatherFrame?.kind === 'icon' && s.weatherFrame.row === row) seenFrames.add(s.weatherFrame.col);
+      return seenFrames.size === 8;
+    });
+    check(`图标动作第 ${row + 1} 组的八帧持续穿着配饰`, seenFrames.size === 8);
+    await until(async () => (await state()).spriteView.startsWith('core:'));
+  }
   if (headless) { pet.setSize(460, 620); await pet.loadURL('app://pet/panel.html'); }
   else await ev('window.iconAPI.openPanel()');
   let panel;
