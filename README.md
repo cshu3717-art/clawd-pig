@@ -62,7 +62,7 @@ GitHub Actions 的 **Build Windows Installers** 可手动运行，推送 `fix/**
 
 代码更新在 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions` 分支。[打开该分支的 Windows 构建](https://github.com/cshu3717-art/clawd-pig/actions/workflows/build-windows.yml?query=branch%3Afix%2Fcomplete-icon-interactions)，选择最近一次成功运行，在页面底部 **Artifacts** 点击 **clawd-pig-windows-x64** 下载，解压后选择 `Setup` 安装版或 `Portable` 免安装版。安装包保留 30 天，可重新运行工作流。
 
-v1.2.0 的构建结果以该分支最近一次成功运行和 [VALIDATION.md](VALIDATION.md) 为准。历史 v1.1.0 于 2026-10-08 在 Windows 通过 76 项检查：[旧版安装包与测试记录](https://github.com/cshu3717-art/clawd-pig/actions/runs/37786678568)，旧包不包含首次引导与全动作配饰。
+2026-10-09，v1.2.0 在 Windows 通过 **29 项 Node 测试 + 64 项桌宠检查 + 16 项首次引导检查，共 109 项**，安装版与免安装版构建成功：[下载 v1.2.0 与查看测试记录](https://github.com/cshu3717-art/clawd-pig/actions/runs/37947362589)。在页面底部 Artifacts 选择 **clawd-pig-windows-x64**，解压后使用 `小猪桌宠-Setup-1.2.0-x64.exe` 或 `小猪桌宠-Portable-1.2.0-x64.exe`；附件保留至 2026-11-08。
 
 ## 仍需完成的内容
 

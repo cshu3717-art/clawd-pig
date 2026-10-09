@@ -15,11 +15,16 @@
 
 ## Windows 构建
 
-v1.2.0 的代码将由 fix/complete-icon-interactions 分支工作流验证并生成 NSIS / Portable。
+2026-10-09，代码提交 `7d248b16a28f23ec702e8e6bd8f86c3f5d17ae8b` 在 cshu3717-art/clawd-pig 的 fix/complete-icon-interactions 分支完成构建。
 
-[查看当前分支的 Windows 构建](https://github.com/cshu3717-art/clawd-pig/actions/workflows/build-windows.yml?query=branch%3Afix%2Fcomplete-icon-interactions)
+[Windows 构建、109 项检查及下载附件](https://github.com/cshu3717-art/clawd-pig/actions/runs/37947362589)
 
-最终通过的运行 ID、检查数和附件会在工作流结束后补到这里。历史 v1.1.0 的 [76 项检查和安装包](https://github.com/cshu3717-art/clawd-pig/actions/runs/37786678568) 不包含本轮功能。
+- Node：29/29；桌宠交互与配饰：64/64；首次引导：16/16。全部通过。
+- 已生成 `小猪桌宠-Setup-1.2.0-x64.exe` 与 `小猪桌宠-Portable-1.2.0-x64.exe`。
+- 安装包附件 `clawd-pig-windows-x64`，GitHub artifact ID 11624498328，保留至 2026-11-08。
+- GitHub 报告的附件 ZIP SHA-256：`c844a4b94e9b79a0fbaf9e87bf77b805e70e9f2e800027f67e2f053299f4e639`。这是远端构建记录，本轮未在用户电脑下载或运行安装包。
+- 截图与报告附件 `clawd-pig-test-results`，artifact ID 11623748786，保留至 2026-10-23。Windows 截图随附件保存，本轮未在本地查看。
+
 
 ## 验证范围
 
