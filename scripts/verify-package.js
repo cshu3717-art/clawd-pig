@@ -6,7 +6,7 @@ const pkg = require('../package.json');
 const lock = require('../package-lock.json');
 assert.equal(pkg.version, lock.version, 'lockfile version differs');
 assert.equal(pkg.version, lock.packages[''].version, 'lockfile root version differs');
-for (const file of ['lib/weather.js', 'lib/onboarding.js', 'renderer/icon-flow.js', 'renderer/sprite-atlas.js', 'renderer/weather-outfit.js', 'renderer/weather-panel.js', 'renderer/onboarding.js']) {
+for (const file of ['lib/window-layout.js', 'lib/weather.js', 'lib/onboarding.js', 'renderer/icon-flow.js', 'renderer/sprite-atlas.js', 'renderer/weather-outfit.js', 'renderer/weather-panel.js', 'renderer/onboarding.js']) {
   assert.ok(fs.statSync(file).size > 0, `missing ${file}`);
   execFileSync(process.execPath, ['--check', file]);
 }

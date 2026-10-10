@@ -43,6 +43,14 @@ function clampNum(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
 
+let displayRevision = 0;
+function rememberPosition(position) {
+  if (position && Number.isInteger(position.revision)) displayRevision = Math.max(displayRevision, position.revision);
+  return position;
+}
+ipcRenderer.on('pet:position', (_event, position) => rememberPosition(position));
+ipcRenderer.on('pet:display-change', (_event, position) => rememberPosition(position));
+
 contextBridge.exposeInMainWorld('petAPI', {
   // 素材：{ sheet: dataUrl|null, reference: dataUrl|null, layout: object|null }
   getAssets: () => ipcRenderer.invoke('pet:get-assets'),
@@ -54,16 +62,23 @@ contextBridge.exposeInMainWorld('petAPI', {
   getWorkArea: (point) => ipcRenderer.invoke('pet:get-work-area', point),
 
   // 窗口位置（DIP）
-  getPosition: () => ipcRenderer.invoke('pet:get-position'),
-  setPosition: (x, y) => ipcRenderer.invoke('pet:set-position', clampNum(x), clampNum(y)),
+  getPosition: () => ipcRenderer.invoke('pet:get-position').then(rememberPosition),
+  fitWorkArea: () => ipcRenderer.invoke('pet:fit-work-area').then(rememberPosition),
+  setPosition: (x, y) => ipcRenderer.invoke('pet:set-position', clampNum(x), clampNum(y), displayRevision),
+  onDisplayChange: cb => {
+    const listener = (_event, position) => cb(position);
+    ipcRenderer.on('pet:display-change', listener);
+    return () => ipcRenderer.removeListener('pet:display-change', listener);
+  },
 
   // —— 自主移动（唯一控制器在主进程，插值平滑，完成只通知一次）
-  startMove: (x, y, durationMs, targetPoint) =>
+  startMove: (x, y, durationMs, targetPoint, revision = displayRevision) =>
     ipcRenderer.invoke('pet:start-move', {
       x: clampNum(x),
       y: clampNum(y),
       duration: clampNum(durationMs),
       targetPoint,
+      revision,
     }),
   cancelMove: () => ipcRenderer.invoke('pet:cancel-move'),
   onMoveComplete: (cb) => {
@@ -88,6 +103,7 @@ contextBridge.exposeInMainWorld('petAPI', {
       anchorX: clampNum(b && b.anchorX),
       anchorY: clampNum(b && b.anchorY),
       preserveAnchor: !!(b && b.preserveAnchor),
+      revision: Number.isInteger(b && b.revision) ? b.revision : displayRevision,
     }),
 
   // 右键菜单：返回 'walk-toggle'|'to-idle'|'action:<id>'|'size:<id>'|'sprite:<id>'|'demo:all'|'quit'|null

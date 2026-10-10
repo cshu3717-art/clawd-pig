@@ -633,6 +633,7 @@
 
   /* ================= 窗口锚点（猪底中心 A） ================= */
   let A = { cx: 120, feet: 120 };
+  let displayRevision = 0;
   let winX = 120, winY = 120;
   let bubbleW = 0;
   let bubbleOpen = false;
@@ -653,7 +654,7 @@
     winX = nx; winY = ny;
     canvas.style.left = Math.round(canvasLeft) + 'px';
     bubbleEl.style.left = Math.round(canvasLeft + pigCVC()) + 'px';
-    pet.setBounds({ x: nx, y: ny, width: W, height: H, preserveAnchor, anchorX: canvasLeft + pigCVC(), anchorY: canvasTop + pigR.y + pigR.h });
+    pet.setBounds({ x: nx, y: ny, width: W, height: H, preserveAnchor, anchorX: canvasLeft + pigCVC(), anchorY: canvasTop + pigR.y + pigR.h, revision: displayRevision });
   }
 
   async function applyInitialWindow() {
@@ -663,6 +664,10 @@
   }
   function syncPosition(pos) {
     if (!pos) return;
+    if (Number.isInteger(pos.revision)) {
+      if (pos.revision < displayRevision) return;
+      displayRevision = pos.revision;
+    }
     winX = pos.x; winY = pos.y;
     A.cx = Number.isFinite(pos.anchorX) ? pos.anchorX : pos.x + (winW() - canvasW) / 2 + pigCVC();
     A.feet = Number.isFinite(pos.anchorY) ? pos.anchorY : pos.y + (bubbleOpen ? 44 : 0) + floorY();
@@ -670,18 +675,7 @@
   if (pet.onPosition) pet.onPosition(syncPosition);
 
   async function clampIntoWorkArea() {
-    const wa = await pet.getWorkArea();
-    if (!wa) return;
-    const canvasLeft = (winW() - canvasW) / 2;
-    const canvasTop = bubbleOpen ? 44 : 0;
-    const left = A.cx - canvasLeft - pigCVC();
-    const top = A.feet - canvasTop - (pigR.y + pigR.h);
-    let dx = 0, dy = 0;
-    if (left < wa.x) dx = wa.x - left;
-    if (left + winW() > wa.x + wa.width) dx = wa.x + wa.width - winW() - left;
-    if (top < wa.y) dy = wa.y - top;
-    if (top + winH() > wa.y + wa.height) dy = wa.y + wa.height - winH() - top;
-    if (dx || dy) { A.cx += dx; A.feet += dy; applyWindow(false); }
+    syncPosition(await pet.fitWorkArea());
   }
 
   function setSizePreset(id) {
@@ -1767,8 +1761,9 @@
   }
 
   async function chooseAndStartMove() {
+    const revision = displayRevision;
     const [wa, pos] = await Promise.all([pet.getWorkArea(), pet.getPosition()]);
-    if (!wa || !pos) return;
+    if (!wa || !pos || revision !== displayRevision) return;
     if (!walking || autoBlocked() || mvState !== 'idle') return;
 
     const minX = wa.x + 10;
@@ -1801,7 +1796,7 @@
     motionSeq++;
     mvState = 'moving';
     spriteWalkNow();
-    pet.startMove(tx, ty, dur).then((ok) => {
+    pet.startMove(tx, ty, dur, undefined, revision).then((ok) => {
       if (ok === false && walking) enterIdle();
     });
   }
@@ -1857,7 +1852,7 @@
   function onPointerDown(event) {
     if (event.pointerType === 'mouse' && event.button !== 0) return; // 右键走菜单，不做普通点击
     if (downInfo) return; // 已有一路指针按下，忽略重复
-    downInfo = { x: event.screenX, y: event.screenY, t: Date.now(), moved: false };
+    downInfo = { x: event.screenX, y: event.screenY, t: Date.now(), moved: false, pointerId: event.pointerId };
     dragging = false;
     dragMoved = false;
     // 用户按下即取消自主移动与待机计时（拖动/点击都不允许窗口继续自主移动）
@@ -1927,6 +1922,24 @@
     clearDragState();
     if (walking && !autoBlocked()) enterIdle();
   }
+
+  async function onDisplayChange(position) {
+    syncPosition(position);
+    const revision = displayRevision;
+    if (downInfo) {
+      try { canvas.releasePointerCapture(downInfo.pointerId); } catch { /* 指针已释放 */ }
+    }
+    clearDragState();
+    pauseAutoForUser();
+    clearSpeech();
+    // 取消动作可能收起气泡、改变窗口大小；等这些 IPC 结束再记住真实锚点。
+    const current = await pet.fitWorkArea();
+    if (revision !== displayRevision) return;
+    syncPosition(current);
+    persistNow();
+    if (walking && !autoBlocked()) enterIdle();
+  }
+  if (pet.onDisplayChange) pet.onDisplayChange(onDisplayChange);
 
   /* ================= 右键菜单 ================= */
   async function showContextMenu() {
@@ -2304,10 +2317,11 @@
 
   /* ================= 图标仪式（挑食地吃 / 种植） ================= */
   async function walkToDesktopIcon(entry, signal) {
+    const revision = displayRevision;
     const target = entry && entry.target;
     if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.y) || signal.aborted) return false;
     const [wa, pos] = await Promise.all([pet.getWorkArea(target), pet.getPosition()]);
-    if (!wa || !pos || signal.aborted) return false;
+    if (!wa || !pos || signal.aborted || revision !== displayRevision) return false;
     syncPosition(pos);
     clearIdleTimer();
     await pet.cancelMove();
@@ -2340,7 +2354,7 @@
       const timer = setTimeout(abort, duration + 1500);
       signal.addEventListener('abort', abort, { once: true });
       unsubscribe = pet.onMoveComplete(pos => { syncPosition(pos); finish(!signal.aborted); });
-      pet.startMove(tx, ty, duration, target).then(ok => { if (ok === false) finish(false); }).catch(() => finish(false));
+      pet.startMove(tx, ty, duration, target, revision).then(ok => { if (ok === false) finish(false); }).catch(() => finish(false));
     });
   }
 
@@ -2411,6 +2425,7 @@
       mode, sizePreset, stateName, moodName, moodVal: { ...moodVal },
       flower: flower ? { ...flower } : null,
       walking, mvState,
+      displayRevision, dragging,
       mealBusy: iconFlow.busy,
       anger, rageBusy: rageFlow.busy, ragePending, lastRageResult,
       weather: weatherState,

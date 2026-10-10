@@ -45,6 +45,8 @@ jobs:
         run: npm run test:smoke
       - name: Test first-run setup and saved preferences
         run: npm run test:setup
+      - name: Test display changes and safe cancellation
+        run: npm run test:displays
       - name: Build NSIS and portable without publishing
         run: npx electron-builder --win --x64 --publish never
       - name: Upload installers

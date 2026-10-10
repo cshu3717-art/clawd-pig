@@ -13,6 +13,7 @@
     'target-unreachable': '这次没有走到目标旁，快捷方式仍在桌面。',
     'target-changed': '快捷方式刚刚变动了，请重新扫描。',
     cancelled: '已取消本次操作，快捷方式可以从原位置或仓库恢复。',
+    'display-changed': '屏幕布局变了，小猪已停下。未吃的图标留在原处，已吃的仍在仓库。',
     'animation-unavailable': '动作素材未就绪，请稍后再试。',
     'storage-write-failed': '仓库记录保存失败，本次操作没有提交。',
     timeout: '小猪没有及时完成动作，已取消，请重试。',

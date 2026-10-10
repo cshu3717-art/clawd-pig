@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const { locate } = require('./lib/desktop-targets');
 const { WeatherService, INTERVAL: WEATHER_INTERVAL } = require('./lib/weather');
 const { Onboarding } = require('./lib/onboarding');
+const { fitWindowBounds } = require('./lib/window-layout');
 
 const ASSET_DIR = __dirname; // 素材与代码同目录（当前工作区）
 const SPRITE_DIR = path.join(__dirname, 'assets');
@@ -75,6 +76,42 @@ protocol.registerSchemesAsPrivileged([
 let win = null;
 let petOffset = { x: 0, y: 0 };
 let petPlaced = false;
+let displayRevision = 0;
+
+function petPosition(w = win) {
+  const b = w.getBounds();
+  return { x: b.x, y: b.y, anchorX: b.x + petOffset.x, anchorY: b.y + petOffset.y, revision: displayRevision };
+}
+
+function sendPetPosition() {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send('pet:position', petPosition());
+  }
+}
+
+function fitOnDisplay(w, bounds = w.getBounds(), offset) {
+  const display = offset
+    ? screen.getDisplayNearestPoint({ x: Math.round(bounds.x + offset.x), y: Math.round(bounds.y + offset.y) })
+    : screen.getDisplayMatching(bounds);
+  return fitWindowBounds(bounds, display.workArea, offset);
+}
+
+function recoverDisplayLayout() {
+  // 先废除旧坐标与文件事务，再移动窗口，迟到的 IPC 不能恢复旧路线。
+  displayRevision++;
+  clearMove();
+  cancelMeal('display-changed');
+  if (win && !win.isDestroyed()) {
+    win.setBounds(fitOnDisplay(win, win.getBounds(), petOffset));
+    sendPetPosition();
+    win.webContents.send('pet:display-change', petPosition());
+  }
+  if (panelWin && !panelWin.isDestroyed()) panelWin.setBounds(fitOnDisplay(panelWin));
+}
+
+function onDisplayMetrics(_event, _display, metrics) {
+  if (metrics.some(key => ['bounds', 'workArea', 'scaleFactor', 'rotation'].includes(key))) recoverDisplayLayout();
+}
 
 /* ---------------- 素材读取（只读，绝不修改 PNG） ---------------- */
 
@@ -178,11 +215,7 @@ function createWindow() {
   win.webContents.on('render-process-gone', () => cancelMeal());
   win.webContents.on('did-start-loading', () => cancelMeal());
 
-  win.on('move', () => {
-    if (!win || win.isDestroyed()) return;
-    const b = win.getBounds();
-    win.webContents.send('pet:position', { x: b.x, y: b.y, anchorX: b.x + petOffset.x, anchorY: b.y + petOffset.y });
-  });
+  win.on('move', sendPetPosition);
   win.on('closed', () => { clearMove(); win = null; app.quit(); });
 
   win.loadURL('app://pet/index.html');
@@ -215,13 +248,20 @@ ipcMain.handle('pet:get-work-area', (event, point) => {
 ipcMain.handle('pet:get-position', (event) => {
   const w = winOf(event);
   if (!w) return null;
-  const b = w.getBounds();
-  return { x: b.x, y: b.y, anchorX: b.x + petOffset.x, anchorY: b.y + petOffset.y };
+  return petPosition(w);
 });
 
-ipcMain.handle('pet:set-position', (event, x, y) => {
+ipcMain.handle('pet:fit-work-area', (event) => {
   const w = winOf(event);
-  if (!w || !isFiniteNum(x) || !isFiniteNum(y)) return false;
+  if (w !== win || !w) return null;
+  w.setBounds(fitOnDisplay(w, w.getBounds(), petOffset));
+  sendPetPosition();
+  return petPosition(w);
+});
+
+ipcMain.handle('pet:set-position', (event, x, y, revision) => {
+  const w = winOf(event);
+  if (!w || revision !== displayRevision || !isFiniteNum(x) || !isFiniteNum(y)) return false;
   w.setPosition(Math.round(x), Math.round(y));
   return true;
 });
@@ -242,27 +282,23 @@ function easeInOutSine(x) {
 
 ipcMain.handle('pet:start-move', (event, opts) => {
   const w = winOf(event);
-  if (!w || !opts) return false;
+  if (!w || !opts || opts.revision !== displayRevision) return false;
   const { x, y } = opts;
   if (!isFiniteNum(x) || !isFiniteNum(y)) return false;
   let dur = opts.duration;
   if (!isFiniteNum(dur)) dur = 4000;
   dur = Math.max(1500, Math.min(12000, Math.round(dur)));
 
-  // 目标必须落在当前显示器工作区内（含10px边距），杜绝越界
+  // 在 DIP 工作区内约束目的地；超大装饰窗口优先保留小猪身体。
   let tx = Math.round(x);
   let ty = Math.round(y);
   try {
     const p = opts.targetPoint;
     const wa = p && isFiniteNum(p.x) && isFiniteNum(p.y) ? screen.getDisplayNearestPoint(p).workArea : screen.getDisplayMatching(w.getBounds()).workArea;
     const b = w.getBounds();
-    const minX = wa.x + 10;
-    const maxX = wa.x + wa.width - b.width - 10;
-    const minY = wa.y + 10;
-    const maxY = wa.y + wa.height - b.height - 10;
-    if (maxX >= minX) tx = Math.max(minX, Math.min(maxX, tx));
-    if (maxY >= minY) ty = Math.max(minY, Math.min(maxY, ty));
-  } catch (e) { /* 校验失败则按原值 */ }
+    const fitted = fitWindowBounds({ ...b, x: tx, y: ty }, wa, petOffset);
+    tx = fitted.x; ty = fitted.y;
+  } catch { return false; }
 
   clearMove(); // 取消旧任务，保证同一时间只有一个移动
   const from = w.getBounds();
@@ -278,7 +314,7 @@ ipcMain.handle('pet:start-move', (event, opts) => {
     const ny = Math.round(motion.from.y + (motion.to.y - motion.from.y) * ep);
     w.setPosition(nx, ny);
     if (p >= 1) {
-      const done = { token: motion.token, x: nx, y: ny, anchorX: nx + petOffset.x, anchorY: ny + petOffset.y };
+      const done = { token: motion.token, ...petPosition(w) };
       clearMove();
       try { event.sender.send('pet:move-complete', done); } catch (e) { /* ignore */ }
     }
@@ -299,18 +335,24 @@ ipcMain.handle('pet:set-bounds', (event, b) => {
   if (width < 8 || width > MAX_DIM || height < 8 || height > MAX_DIM) return false;
   let nx = Math.round(x), ny = Math.round(y);
   const offset = { x: isFiniteNum(b.anchorX) ? b.anchorX : petOffset.x, y: isFiniteNum(b.anchorY) ? b.anchorY : petOffset.y };
-  if (w === win && b.preserveAnchor && petPlaced) {
-    const current = w.getBounds();
+  const current = w.getBounds();
+  const preserve = b.preserveAnchor || b.revision !== displayRevision;
+  if (w === win && preserve && petPlaced) {
     nx = Math.round(current.x + petOffset.x - offset.x);
     ny = Math.round(current.y + petOffset.y - offset.y);
-    if (motion) {
-      const dx = nx - current.x, dy = ny - current.y;
-      motion.from.x += dx; motion.to.x += dx;
-      motion.from.y += dy; motion.to.y += dy;
-    }
+  }
+  let next = { x: nx, y: ny, width: Math.round(width), height: Math.round(height) };
+  if (w === win && preserve) next = fitOnDisplay(w, next, offset);
+  if (w === win && preserve && motion) {
+    const dx = next.x - current.x, dy = next.y - current.y;
+    motion.from.x += dx; motion.to.x += dx;
+    motion.from.y += dy; motion.to.y += dy;
+    motion.to = fitOnDisplay(w, { ...next, ...motion.to }, offset);
   }
   if (w === win) { petOffset = offset; petPlaced = true; }
-  w.setBounds({ x: nx, y: ny, width: Math.round(width), height: Math.round(height) });
+  w.setBounds(next);
+  // 只有大小/锚点变化时也要回传，不能依赖原生 move 事件。
+  if (w === win) sendPetPosition();
   return true;
 });
 
@@ -788,6 +830,7 @@ function storedList() {
 
 function createPanelWindow(setup = false) {
   if (panelWin && !panelWin.isDestroyed()) {
+    panelWin.setBounds(fitOnDisplay(panelWin));
     panelWin.show(); panelWin.focus();
     if (setup) {
       const target = panelWin.webContents;
@@ -810,6 +853,7 @@ function createPanelWindow(setup = false) {
     },
   });
   panelWin.setMenu(null);
+  panelWin.setBounds(fitOnDisplay(panelWin));
   panelWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   panelWin.webContents.on('will-navigate', (e) => e.preventDefault());
   panelWin.on('closed', () => {
@@ -1126,6 +1170,9 @@ app.whenReady().then(() => {
     },
   });
   createWindow();
+  screen.on('display-added', recoverDisplayLayout);
+  screen.on('display-removed', recoverDisplayLayout);
+  screen.on('display-metrics-changed', onDisplayMetrics);
   weather.refresh();
   weatherTimer = setInterval(() => weather.refresh(), WEATHER_INTERVAL);
 
@@ -1136,6 +1183,9 @@ app.whenReady().then(() => {
 
 // 退出前再落盘一次清单（未完成的 moving 会在下次启动自愈；也可随时“立即恢复全部”）
 app.on('before-quit', () => {
+  screen.removeListener('display-added', recoverDisplayLayout);
+  screen.removeListener('display-removed', recoverDisplayLayout);
+  screen.removeListener('display-metrics-changed', onDisplayMetrics);
   clearInterval(weatherTimer);
   try { reconcileManifest(); saveIconManifest(); saveIconSettings(); } catch (e) { /* ignore */ }
 });
