@@ -2,6 +2,8 @@
 
 Windows 桌面小猪：自由走动和停驻、触摸耳朵/鼻子/肚子、画画、种花、浇水、摘花、送花、刷视频，以及可恢复的吃快捷方式。
 
+继续开发先看 [VALIDATION.md 的续接位置](VALIDATION.md#续接位置2026-10-11核对)，其中记录已完成提交、验证结果与真正待办。
+
 ## 本次更新：v1.2.1
 
 - **屏幕变化后自动找回小猪**：拔插显示器、调整分辨率、缩放、旋转或任务栏工作区后，小猪与仓库面板重新约束到可见区域。原来就能看见的小猪保持原位，左侧或上方副屏的负坐标仍然有效。
@@ -71,7 +73,7 @@ GitHub Actions 的 **Build Windows Installers** 可手动运行，推送 `fix/**
 
 代码更新在 `cshu3717-art/clawd-pig` 的 `fix/complete-icon-interactions` 分支。[打开该分支的 Windows 构建](https://github.com/cshu3717-art/clawd-pig/actions/workflows/build-windows.yml?query=branch%3Afix%2Fcomplete-icon-interactions)，选择最近一次成功运行，在页面底部 **Artifacts** 点击 **clawd-pig-windows-x64** 下载，解压后选择 `Setup` 安装版或 `Portable` 免安装版。安装包保留 30 天，可重新运行工作流。
 
-2026-10-09，v1.2.0 在 Windows 通过 **29 项 Node 测试 + 64 项桌宠检查 + 16 项首次引导检查，共 109 项**，安装版与免安装版构建成功：[下载 v1.2.0 与查看测试记录](https://github.com/cshu3717-art/clawd-pig/actions/runs/37947362589)。在页面底部 Artifacts 选择 **clawd-pig-windows-x64**，解压后使用 `小猪桌宠-Setup-1.2.0-x64.exe` 或 `小猪桌宠-Portable-1.2.0-x64.exe`；附件保留至 2026-11-08。
+2026-10-10，v1.2.1 的 Windows 工作流全部成功，包含 **36 项 Node 测试 + 64 项桌宠检查 + 16 项首次引导检查 + 26 项屏幕恢复检查，共 142 项**，安装版与免安装版构建成功：[下载 v1.2.1 与查看测试记录](https://github.com/cshu3717-art/clawd-pig/actions/runs/38065385114)。在页面底部 Artifacts 选择 **clawd-pig-windows-x64**，解压后使用 `小猪桌宠-Setup-1.2.1-x64.exe` 或 `小猪桌宠-Portable-1.2.1-x64.exe`；附件保留至 2026-11-09。
 
 ## 仍需完成的内容
 
